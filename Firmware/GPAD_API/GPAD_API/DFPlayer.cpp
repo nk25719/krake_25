@@ -333,6 +333,12 @@ void playNotBusyLevel(int level)
   // Or better yet use interupt to find the end of BUSY and set time for the next allowed DFPlayer message
 }
 
+
+void stopPlayback()
+{
+  dfPlayer.stop();
+}
+
 // Play a track but not if the DFPlayer is busy
 bool playAlarmLevel(int alarmNumberToPlay)
 {

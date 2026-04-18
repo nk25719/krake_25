@@ -377,7 +377,20 @@ bool applyMuteSetting(const String &rawValue)
   {
     return false;
   }
+
+  const bool wasMuted = isMuted();
   setMuted(requestedMutedState);
+
+  if (requestedMutedState)
+  {
+    noTone(TONE_PIN);
+    stopPlayback();
+  }
+  else if (wasMuted != requestedMutedState)
+  {
+    annunciateAlarmLevel(&Serial);
+  }
+
   return true;
 }
 
