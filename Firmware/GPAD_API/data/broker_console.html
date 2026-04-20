@@ -21,6 +21,7 @@
       padding: 9px 11px;
       font-size: 0.9rem;
       color: #315541;
+      word-break: break-word;
     }
     .chip strong { color: #113521; }
     .meta-line { font-size: 0.85rem; color: #4d6658; margin-top: 8px; }
@@ -54,6 +55,22 @@
     }
     .pill.ok { background: #d6f0df; color: #125a32; }
     .pill.bad { background: #f8d8df; color: #7b1a32; }
+    .watch-tools {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr;
+      margin-top: 4px;
+    }
+    .watch-tools .text-input {
+      margin-top: 0;
+      margin-bottom: 0;
+    }
+    @media (min-width: 680px) {
+      .watch-tools {
+        grid-template-columns: 1fr auto;
+        align-items: center;
+      }
+    }
     @media (min-width: 980px) {
       .console-grid { grid-template-columns: 1fr 1fr; }
       .console-grid .card-wide { grid-column: 1 / -1; }
@@ -81,17 +98,24 @@
   </nav>
 
   <main class="container">
+    <section class="card" style="margin-bottom: 12px;">
+      <h1>Monitor Broker Topics</h1>
+      <p class="subtitle">Watch any MQTT topics, review active participants, and publish quick test messages from one page.</p>
+      <div class="meta-line">Tip: include <code>*_ACK</code> topics to get online/offline status aging in the table below.</div>
+    </section>
+
     <div class="status-strip">
       <div class="chip">Program: <strong>PMD_Processing_MQTT</strong> (<strong>V0.37</strong>)</div>
-      <div class="chip">Broker: <strong id="brokerName">public.cloud.shiftr.io</strong></div>
+      <div class="chip">Broker: <strong id="brokerName">-</strong></div>
       <div class="chip">Watched topics: <strong id="watchTopicCurrent">-</strong></div>
       <div class="chip">Drakes seen: <strong id="drakeCount">0</strong></div>
+      <div class="chip">Last refresh: <strong id="lastRefresh">-</strong></div>
     </div>
 
     <div class="console-grid">
       <section class="card">
         <h1>Send Message / Alarm</h1>
-        <p class="subtitle">Publish MQTT payloads directly for test and validation workflows.</p>
+        <p class="subtitle">Publish MQTT payloads directly for validation workflows.</p>
 
         <label for="publishTopic">Topic</label>
         <input id="publishTopic" class="text-input" placeholder="AABBCCDDEEFF_ALM" />
@@ -115,9 +139,9 @@
 
       <section class="card">
         <h1>Monitor Topic Activity</h1>
-        <p class="subtitle">Use known KRAKE topic patterns to monitor participants and ACK flow.</p>
+        <p class="subtitle">Add one or more topics (comma-separated). Duplicates and extra spaces are cleaned automatically.</p>
 
-        <label for="watchTopic">Topics to watch (comma-separated)</label>
+        <label for="watchTopic">Topics to watch</label>
         <input id="watchTopic" class="text-input" placeholder="10061C686A14_ACK,adam/out/LEBANON-5" />
 
         <div class="quick-topics">
@@ -131,14 +155,18 @@
           <button class="action-btn" onclick="saveWatchTopic()">Start Watching Topics</button>
           <button class="action-btn secondary" onclick="clearWatchTopic()">Clear</button>
         </div>
-        <div class="meta-line">Tip: if you monitor <code>*_ACK</code>, the table will highlight online/offline and participant age.</div>
       </section>
 
       <section class="card card-wide">
         <h1>KRAKE Device Status</h1>
-        <p class="subtitle">Online list is built from <code>_ACK</code> status beacons and optional watched topic participation.</p>
+        <p class="subtitle">Online list is built from <code>_ACK</code> status beacons and optional watched-topic participation.</p>
 
-        <div style="overflow-x:auto;">
+        <div class="watch-tools">
+          <input id="tableFilter" class="text-input" placeholder="Filter rows by name, id, status, or topic" oninput="applyTableFilter()" />
+          <button class="action-btn secondary" onclick="clearFilter()">Clear Filter</button>
+        </div>
+
+        <div style="overflow-x:auto; margin-top: 10px;">
           <table class="status-table">
             <thead>
               <tr>
@@ -185,6 +213,25 @@
       node.style.color = isError ? '#b00020' : '#146620';
     }
 
+    function utcStampCompact() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return [
+        d.getUTCFullYear(),
+        pad(d.getUTCMonth() + 1),
+        pad(d.getUTCDate())
+      ].join('') + '_' + [pad(d.getUTCHours()), pad(d.getUTCMinutes()), pad(d.getUTCSeconds())].join('');
+    }
+
+    function sanitizeTopicList(raw) {
+      if (!raw) return '';
+      const unique = [];
+      raw.split(',').map(v => v.trim()).filter(Boolean).forEach(topic => {
+        if (!unique.includes(topic)) unique.push(topic);
+      });
+      return unique.join(',');
+    }
+
     async function postForm(url, bodyObj) {
       const body = new URLSearchParams(bodyObj);
       const res = await fetch(url, {
@@ -208,16 +255,17 @@
     }
 
     function fillAlarmTemplate() {
-      document.getElementById('publishPayload').value = 'a3 20260420_121212 BrokerConsole test alarm';
+      document.getElementById('publishPayload').value = 'a3 ' + utcStampCompact() + ' BrokerConsole test alarm';
     }
 
     function fillInfoTemplate() {
-      document.getElementById('publishPayload').value = 'i1 20260420_121212 BrokerConsole status ping';
+      document.getElementById('publishPayload').value = 'i1 ' + utcStampCompact() + ' BrokerConsole status ping';
     }
 
     function copyWatchToPublish() {
-      const watch = document.getElementById('watchTopic').value.trim();
-      if (watch) document.getElementById('publishTopic').value = watch;
+      const watch = sanitizeTopicList(document.getElementById('watchTopic').value);
+      if (!watch) return;
+      document.getElementById('publishTopic').value = watch.split(',')[0];
     }
 
     async function publishMessage() {
@@ -236,9 +284,8 @@
 
     function appendWatchTopic(topic) {
       const input = document.getElementById('watchTopic');
-      const current = input.value.split(',').map(v => v.trim()).filter(Boolean);
-      if (!current.includes(topic)) current.push(topic);
-      input.value = current.join(',');
+      const merged = sanitizeTopicList((input.value ? input.value + ',' : '') + topic);
+      input.value = merged;
       saveWatchTopic();
     }
 
@@ -249,7 +296,8 @@
 
     async function saveWatchTopic() {
       try {
-        const topic = document.getElementById('watchTopic').value.trim();
+        const topic = sanitizeTopicList(document.getElementById('watchTopic').value);
+        document.getElementById('watchTopic').value = topic;
         await postForm('/broker-console/topic', { topics: topic });
         document.getElementById('watchTopicCurrent').textContent = topic || '-';
         showMessage(topic ? ('Watch topics updated: ' + topic) : 'Watch topics cleared.');
@@ -290,6 +338,22 @@
           </tr>
         `;
       }).join('');
+
+      applyTableFilter();
+    }
+
+    function applyTableFilter() {
+      const q = document.getElementById('tableFilter').value.trim().toLowerCase();
+      const rows = document.querySelectorAll('#drakeTableBody tr');
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = (!q || text.includes(q)) ? '' : 'none';
+      });
+    }
+
+    function clearFilter() {
+      document.getElementById('tableFilter').value = '';
+      applyTableFilter();
     }
 
     async function refreshData() {
@@ -297,8 +361,10 @@
         const res = await fetch('/broker-console/data');
         if (!res.ok) throw new Error('Unable to load broker data');
         const data = await res.json();
-        const watchedTopics = data.watchedTopics || data.watchedTopic || '';
+        const watchedTopics = sanitizeTopicList(data.watchedTopics || data.watchedTopic || '');
+        document.getElementById('brokerName').textContent = data.broker || '-';
         document.getElementById('watchTopicCurrent').textContent = watchedTopics || '-';
+        document.getElementById('lastRefresh').textContent = new Date().toLocaleTimeString();
         if (!document.getElementById('watchTopic').value && watchedTopics) {
           document.getElementById('watchTopic').value = watchedTopics;
         }
