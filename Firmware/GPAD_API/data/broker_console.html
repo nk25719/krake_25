@@ -83,7 +83,7 @@
   <main class="container">
     <div class="status-strip">
       <div class="chip">Program: <strong>PMD_Processing_MQTT</strong> (<strong>V0.37</strong>)</div>
-      <div class="chip">Broker: <strong id="brokerName">public.cloud.shiftr.io</strong></div>
+      <div class="chip">Broker: <strong id="brokerName">-</strong></div>
       <div class="chip">Watched topics: <strong id="watchTopicCurrent">-</strong></div>
       <div class="chip">Drakes seen: <strong id="drakeCount">0</strong></div>
     </div>
@@ -121,8 +121,8 @@
         <input id="watchTopic" class="text-input" placeholder="10061C686A14_ACK,adam/out/LEBANON-5" />
 
         <div class="quick-topics">
-          <button class="topic-btn" onclick="appendWatchTopic('10061C686A14_ACK')">20240421_USA4_ACK</button>
-          <button class="topic-btn" onclick="appendWatchTopic('CCDBA730098C_ACK')">20240421_LEB1_ACK</button>
+          <button class="topic-btn" onclick="appendWatchTopic('10061C686A14_ACK')">10061C686A14_ACK</button>
+          <button class="topic-btn" onclick="appendWatchTopic('CCDBA730098C_ACK')">CCDBA730098C_ACK</button>
           <button class="topic-btn" onclick="appendWatchTopic('F024F9F1B874_ACK')">KRAKE_LB0001_ACK</button>
           <button class="topic-btn" onclick="appendWatchTopic('adam/out/LEBANON-5')">ADAM_Server</button>
         </div>
@@ -208,11 +208,24 @@
     }
 
     function fillAlarmTemplate() {
-      document.getElementById('publishPayload').value = 'a3 20260420_121212 BrokerConsole test alarm';
+      document.getElementById('publishPayload').value = 'a3 ' + nowStamp() + ' BrokerConsole test alarm';
     }
 
     function fillInfoTemplate() {
-      document.getElementById('publishPayload').value = 'i1 20260420_121212 BrokerConsole status ping';
+      document.getElementById('publishPayload').value = 'i1 ' + nowStamp() + ' BrokerConsole status ping';
+    }
+
+    function nowStamp() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return (
+        d.getFullYear() +
+        pad(d.getMonth() + 1) +
+        pad(d.getDate()) + '_' +
+        pad(d.getHours()) +
+        pad(d.getMinutes()) +
+        pad(d.getSeconds())
+      );
     }
 
     function copyWatchToPublish() {
@@ -298,6 +311,7 @@
         if (!res.ok) throw new Error('Unable to load broker data');
         const data = await res.json();
         const watchedTopics = data.watchedTopics || data.watchedTopic || '';
+        document.getElementById('brokerName').textContent = data.broker || '-';
         document.getElementById('watchTopicCurrent').textContent = watchedTopics || '-';
         if (!document.getElementById('watchTopic').value && watchedTopics) {
           document.getElementById('watchTopic').value = watchedTopics;

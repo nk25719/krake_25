@@ -571,7 +571,13 @@ void clearWatchedTopics()
 
 bool setWatchedTopics(const String &rawTopics)
 {
-  clearWatchedTopics();
+  char parsedTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
+  uint8_t parsedCount = 0;
+  for (uint8_t i = 0; i < MAX_WATCH_TOPICS; i++)
+  {
+    parsedTopics[i][0] = '\0';
+  }
+
   String token = "";
   for (size_t i = 0; i <= rawTopics.length(); i++)
   {
@@ -581,17 +587,25 @@ bool setWatchedTopics(const String &rawTopics)
       token.trim();
       if (token.length() > 0)
       {
-        if (token.length() >= MAX_TOPIC_LEN || watchedTopicCount >= MAX_WATCH_TOPICS)
+        if (token.length() >= MAX_TOPIC_LEN || parsedCount >= MAX_WATCH_TOPICS)
         {
           return false;
         }
-        token.toCharArray(watchedTopics[watchedTopicCount], MAX_TOPIC_LEN);
-        watchedTopicCount++;
+        token.toCharArray(parsedTopics[parsedCount], MAX_TOPIC_LEN);
+        parsedCount++;
       }
       token = "";
       continue;
     }
     token += c;
+  }
+
+  clearWatchedTopics();
+  watchedTopicCount = parsedCount;
+  for (uint8_t i = 0; i < parsedCount; i++)
+  {
+    strncpy(watchedTopics[i], parsedTopics[i], MAX_TOPIC_LEN - 1);
+    watchedTopics[i][MAX_TOPIC_LEN - 1] = '\0';
   }
   return true;
 }
@@ -603,6 +617,8 @@ String trackedDrakesJson()
   payload += jsonEscape(watchedTopicCount > 0 ? String(watchedTopics[0]) : String(""));
   payload += "\",\"watchedTopics\":\"";
   payload += jsonEscape(joinedWatchedTopics());
+  payload += "\",\"broker\":\"";
+  payload += jsonEscape(String(mqtt_broker_name));
   payload += "\",\"drakes\":[";
   bool first = true;
 
@@ -1026,6 +1042,15 @@ void setupOTA()
                 request->send(400, "text/plain", "missing topics");
                 return;
               }
+
+              char previousTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
+              const uint8_t previousTopicCount = watchedTopicCount;
+              for (uint8_t i = 0; i < previousTopicCount; i++)
+              {
+                strncpy(previousTopics[i], watchedTopics[i], MAX_TOPIC_LEN - 1);
+                previousTopics[i][MAX_TOPIC_LEN - 1] = '\0';
+              }
+
               const String newTopics = request->hasParam("topics", true) ? request->getParam("topics", true)->value() : request->getParam("topic", true)->value();
               if (!setWatchedTopics(newTopics))
               {
@@ -1034,6 +1059,13 @@ void setupOTA()
               }
               if (client.connected())
               {
+                for (uint8_t i = 0; i < previousTopicCount; i++)
+                {
+                  if (strlen(previousTopics[i]) > 0)
+                  {
+                    client.unsubscribe(previousTopics[i]);
+                  }
+                }
                 for (uint8_t i = 0; i < watchedTopicCount; i++)
                 {
                   client.subscribe(watchedTopics[i]);
