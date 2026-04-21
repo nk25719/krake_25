@@ -164,8 +164,10 @@
     <div class="status-strip">
       <div class="chip">Program: <strong>PMD_Processing_MQTT</strong> (<strong>V0.37</strong>)</div>
       <div class="chip">Broker: <strong id="brokerName">public.cloud.shiftr.io</strong></div>
+      <div class="chip">MQTT: <strong id="mqttState">-</strong></div>
+      <div class="chip">Local mute: <strong id="muteState">-</strong></div>
       <div class="chip">Watched topics: <strong id="watchTopicCurrent">-</strong></div>
-      <div class="chip">Drakes seen: <strong id="drakeCount">0</strong></div>
+      <div class="chip">Krakes seen: <strong id="krakeCount">0</strong></div>
     </div>
 
     <div class="console-grid">
@@ -215,6 +217,26 @@
       </section>
 
       <section class="card">
+        <h1>Broker + Subscription Controls</h1>
+        <p class="subtitle">Manage MQTT broker connection, subscribed topics, and local mute.</p>
+
+        <label for="brokerInput">Broker host</label>
+        <input id="brokerInput" class="text-input" placeholder="public.cloud.shiftr.io" />
+
+        <label for="subTopicsInput">Extra subscribe topics (comma-separated)</label>
+        <input id="subTopicsInput" class="text-input" placeholder="adam/out/LEBANON-5,OTHER_TOPIC" />
+
+        <div class="button-row">
+          <button id="btnSetBroker" class="action-btn" type="button">Update Broker</button>
+          <button id="btnSetSubs" class="action-btn secondary" type="button">Update Subscriptions</button>
+        </div>
+        <div class="button-row">
+          <button id="btnMuteLocal" class="action-btn secondary" type="button">Mute Local Device</button>
+          <button id="btnUnmuteLocal" class="action-btn secondary" type="button">Unmute Local Device</button>
+        </div>
+      </section>
+
+      <section class="card">
         <h1>Device Info</h1>
         <p class="subtitle">Optional status fields from your firmware placeholders or template engine.</p>
 
@@ -248,10 +270,11 @@
                 <th>Last topic</th>
                 <th>Age status (s)</th>
                 <th>Age topic (s)</th>
+                <th>Actions</th>
               </tr>
             </thead>
-            <tbody id="drakeTableBody">
-              <tr><td colspan="9">Waiting for broker data...</td></tr>
+            <tbody id="krakeTableBody">
+              <tr><td colspan="10">Waiting for broker data...</td></tr>
             </tbody>
           </table>
         </div>

@@ -1,6 +1,7 @@
 (function () {
   const state = {
-    pollHandle: null
+    pollHandle: null,
+    lastData: null
   };
 
   function byId(id) {
@@ -60,18 +61,18 @@
     return minutes + 'm ' + remainder + 's';
   }
 
-  function renderDrakeTable(drakes) {
-    const tbody = byId('drakeTableBody');
+  function renderKrakeTable(krakes) {
+    const tbody = byId('krakeTableBody');
 
-    if (!drakes || drakes.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9">No tracked devices yet.</td></tr>';
-      byId('drakeCount').textContent = '0';
+    if (!krakes || krakes.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="10">No tracked devices yet.</td></tr>';
+      byId('krakeCount').textContent = '0';
       return;
     }
 
-    const rows = drakes.map((drake) => {
-      const online = !!drake.online;
-      const topicActive = !!drake.topicParticipant;
+    const rows = krakes.map((krake) => {
+      const online = !!krake.online;
+      const topicActive = !!krake.topicParticipant;
       const rowClass = online ? 'row-online' : 'row-offline';
       const onlinePill = online
         ? '<span class="pill ok">ONLINE</span>'
@@ -79,30 +80,43 @@
       const topicPill = topicActive
         ? '<span class="pill ok">ACTIVE</span>'
         : '<span class="pill bad">IDLE</span>';
+      const cleanedId = parsePrimaryId(krake.id || '').replace(/[^A-Za-z0-9]/g, '');
 
       return [
         '<tr class="' + rowClass + '">',
-        '<td>' + parsePrimaryId(drake.id) + '</td>',
-        '<td><code>' + (drake.id || '-') + '</code></td>',
+        '<td>' + parsePrimaryId(krake.id) + '</td>',
+        '<td><code>' + (krake.id || '-') + '</code></td>',
         '<td>' + onlinePill + '</td>',
         '<td>' + topicPill + '</td>',
-        '<td>' + (Number.isFinite(drake.rssi) ? drake.rssi : '-') + '</td>',
-        '<td><code>' + (drake.status || '-') + '</code></td>',
-        '<td><code>' + (drake.lastTopic || '-') + '</code></td>',
-        '<td>' + ageText(drake.secondsSinceStatus) + '</td>',
-        '<td>' + ageText(drake.secondsSinceTopic) + '</td>',
+        '<td>' + (Number.isFinite(krake.rssi) ? krake.rssi : '-') + '</td>',
+        '<td><code>' + (krake.status || '-') + '</code></td>',
+        '<td><code>' + (krake.lastTopic || '-') + '</code></td>',
+        '<td>' + ageText(krake.secondsSinceStatus) + '</td>',
+        '<td>' + ageText(krake.secondsSinceTopic) + '</td>',
+        '<td>' +
+          '<button class="topic-btn small js-mute-krake" data-id="' + cleanedId + '" type="button">Mute</button> ' +
+          '<button class="topic-btn small js-unmute-krake" data-id="' + cleanedId + '" type="button">Unmute</button>' +
+          '</td>',
         '</tr>'
       ].join('');
     });
 
     tbody.innerHTML = rows.join('');
-    byId('drakeCount').textContent = String(drakes.length);
+    byId('krakeCount').textContent = String(krakes.length);
   }
 
   function updateWatchUi(watchedTopics) {
     const normalized = normalizeTopicList(watchedTopics || '');
     byId('watchTopic').value = normalized;
     byId('watchTopicCurrent').textContent = normalized || '-';
+  }
+
+  function updateStatusUi(data) {
+    byId('brokerName').textContent = data.broker || '-';
+    byId('mqttState').textContent = data.mqttConnected ? 'connected' : 'disconnected';
+    byId('muteState').textContent = data.muted ? 'muted' : 'unmuted';
+    byId('brokerInput').value = data.broker || '';
+    byId('subTopicsInput').value = data.extraTopics || '';
   }
 
   async function refreshBrokerData() {
@@ -113,8 +127,10 @@
       }
 
       const data = await response.json();
+      state.lastData = data;
+      updateStatusUi(data);
       updateWatchUi(data.watchedTopics || data.watchedTopic || '');
-      renderDrakeTable(Array.isArray(data.drakes) ? data.drakes : []);
+      renderKrakeTable(Array.isArray(data.krakes) ? data.krakes : (Array.isArray(data.drakes) ? data.drakes : []));
     } catch (error) {
       showMessage('Broker data refresh failed: ' + error.message, true);
     }
@@ -179,6 +195,57 @@
     }
   }
 
+  async function setBroker() {
+    const broker = byId('brokerInput').value.trim();
+    if (!broker) {
+      showMessage('Broker is required.', true);
+      return;
+    }
+    try {
+      await postForm('/settings/broker', { broker });
+      showMessage('Broker updated and reconnect requested.');
+      await refreshBrokerData();
+    } catch (error) {
+      showMessage('Failed to set broker: ' + error.message, true);
+    }
+  }
+
+  async function setSubscriptions() {
+    const topics = normalizeTopicList(byId('subTopicsInput').value);
+    try {
+      await postForm('/settings/topics', { topics });
+      showMessage('Subscribe topics updated.');
+      await refreshBrokerData();
+    } catch (error) {
+      showMessage('Failed to set subscriptions: ' + error.message, true);
+    }
+  }
+
+  async function setLocalMute(muted) {
+    try {
+      await postForm('/settings/mute', { muted: muted ? 'true' : 'false' });
+      showMessage(muted ? 'Local Krake muted.' : 'Local Krake unmuted.');
+      await refreshBrokerData();
+    } catch (error) {
+      showMessage('Failed to update local mute: ' + error.message, true);
+    }
+  }
+
+  async function sendMuteCommandToKrake(baseId, muted) {
+    if (!baseId) {
+      showMessage('Invalid Krake ID for mute command.', true);
+      return;
+    }
+    const topic = baseId + '_ALM';
+    const payload = muted ? 's' : 'u';
+    try {
+      await postForm('/broker-console/publish', { topic, payload });
+      showMessage((muted ? 'Mute' : 'Unmute') + ' sent to ' + topic + '.');
+    } catch (error) {
+      showMessage('Failed to send ' + (muted ? 'mute' : 'unmute') + ': ' + error.message, true);
+    }
+  }
+
   function setupTemplates() {
     byId('btnUseAlm').addEventListener('click', () => {
       const base = parsePrimaryId(byId('publishTopic').value.trim()).replace(/[^A-Za-z0-9]/g, '');
@@ -210,6 +277,10 @@
     byId('btnStartWatching').addEventListener('click', startWatchingTopics);
     byId('btnClearWatch').addEventListener('click', clearWatchTopics);
     byId('btnSendMessage').addEventListener('click', publishMessage);
+    byId('btnSetBroker').addEventListener('click', setBroker);
+    byId('btnSetSubs').addEventListener('click', setSubscriptions);
+    byId('btnMuteLocal').addEventListener('click', () => setLocalMute(true));
+    byId('btnUnmuteLocal').addEventListener('click', () => setLocalMute(false));
 
     byId('btnCopyWatch').addEventListener('click', async () => {
       try {
@@ -229,6 +300,17 @@
       button.addEventListener('click', () => {
         appendWatchTopic(button.dataset.topic || '');
       });
+    });
+
+    byId('krakeTableBody').addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.classList.contains('js-mute-krake')) {
+        sendMuteCommandToKrake(target.dataset.id || '', true);
+      }
+      if (target.classList.contains('js-unmute-krake')) {
+        sendMuteCommandToKrake(target.dataset.id || '', false);
+      }
     });
 
     setupTemplates();

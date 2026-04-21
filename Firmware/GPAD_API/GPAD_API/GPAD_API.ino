@@ -605,11 +605,7 @@ bool setWatchedTopics(const String &rawTopics)
 String trackedDrakesJson()
 {
   const unsigned long now = millis();
-  String payload = "{\"watchedTopic\":\"";
-  payload += jsonEscape(watchedTopicCount > 0 ? String(watchedTopics[0]) : String(""));
-  payload += "\",\"watchedTopics\":\"";
-  payload += jsonEscape(joinedWatchedTopics());
-  payload += "\",\"drakes\":[";
+  String krakesArray = "[";
   bool first = true;
 
   for (uint8_t i = 0; i < MAX_TRACKED_DRAKES; i++)
@@ -624,22 +620,43 @@ String trackedDrakesJson()
 
     if (!first)
     {
-      payload += ",";
+      krakesArray += ",";
     }
     first = false;
-    payload += "{";
-    payload += "\"id\":\"" + jsonEscape(String(trackedDrakes[i].id)) + "\",";
-    payload += "\"online\":" + String(online ? "true" : "false") + ",";
-    payload += "\"topicParticipant\":" + String(topicParticipant ? "true" : "false") + ",";
-    payload += "\"rssi\":" + String(trackedDrakes[i].rssi) + ",";
-    payload += "\"status\":\"" + jsonEscape(String(trackedDrakes[i].status)) + "\",";
-    payload += "\"lastTopic\":\"" + jsonEscape(String(trackedDrakes[i].lastTopic)) + "\",";
-    payload += "\"secondsSinceStatus\":" + String((now - trackedDrakes[i].lastStatusMs) / 1000) + ",";
-    payload += "\"secondsSinceTopic\":" + String((trackedDrakes[i].watchedTopicSeenMs == 0) ? -1 : ((now - trackedDrakes[i].watchedTopicSeenMs) / 1000));
-    payload += "}";
+    krakesArray += "{";
+    krakesArray += "\"id\":\"" + jsonEscape(String(trackedDrakes[i].id)) + "\",";
+    krakesArray += "\"online\":" + String(online ? "true" : "false") + ",";
+    krakesArray += "\"topicParticipant\":" + String(topicParticipant ? "true" : "false") + ",";
+    krakesArray += "\"rssi\":" + String(trackedDrakes[i].rssi) + ",";
+    krakesArray += "\"status\":\"" + jsonEscape(String(trackedDrakes[i].status)) + "\",";
+    krakesArray += "\"lastTopic\":\"" + jsonEscape(String(trackedDrakes[i].lastTopic)) + "\",";
+    krakesArray += "\"secondsSinceStatus\":" + String((now - trackedDrakes[i].lastStatusMs) / 1000) + ",";
+    krakesArray += "\"secondsSinceTopic\":" + String((trackedDrakes[i].watchedTopicSeenMs == 0) ? -1 : ((now - trackedDrakes[i].watchedTopicSeenMs) / 1000));
+    krakesArray += "}";
   }
 
-  payload += "]}";
+  krakesArray += "]";
+  String payload = "{\"watchedTopic\":\"";
+  payload += jsonEscape(watchedTopicCount > 0 ? String(watchedTopics[0]) : String(""));
+  payload += "\",\"watchedTopics\":\"";
+  payload += jsonEscape(joinedWatchedTopics());
+  payload += "\",\"broker\":\"";
+  payload += jsonEscape(String(mqtt_broker_name));
+  payload += "\",\"mqttConnected\":";
+  payload += String(client.connected() ? "true" : "false");
+  payload += ",\"muted\":";
+  payload += String(isMuted() ? "true" : "false");
+  payload += ",\"alarmTopic\":\"";
+  payload += jsonEscape(String(subscribe_Alarm_Topic));
+  payload += "\",\"ackTopic\":\"";
+  payload += jsonEscape(String(publish_Ack_Topic));
+  payload += "\",\"extraTopics\":\"";
+  payload += jsonEscape(joinedExtraTopics());
+  payload += "\",\"krakes\":";
+  payload += krakesArray;
+  payload += ",\"drakes\":";
+  payload += krakesArray;
+  payload += "}";
   return payload;
 }
 
