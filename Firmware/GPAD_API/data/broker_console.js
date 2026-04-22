@@ -30,6 +30,44 @@
     node.style.color = isError ? '#b00020' : '#146620';
   }
 
+  function markPlaceholderIssues() {
+    const infoValueIds = [
+      'deviceSerial',
+      'deviceUrl',
+      'deviceIp',
+      'deviceMac',
+      'deviceRssi',
+      'deviceUptime',
+      'mqttState',
+      'deviceFirmware',
+      'deviceCompiledAt'
+    ];
+    let issueCount = 0;
+
+    infoValueIds.forEach((id) => {
+      const node = byId(id);
+      if (!node) return;
+      const text = (node.textContent || '').trim();
+      const unresolvedPlaceholder = /^%[A-Z0-9_]+%$/i.test(text);
+      node.classList.toggle('warn', unresolvedPlaceholder);
+      if (unresolvedPlaceholder) {
+        issueCount += 1;
+      }
+    });
+
+    const issueNode = byId('deviceInfoIssues');
+    if (!issueNode) return;
+
+    if (issueCount === 0) {
+      issueNode.textContent = 'None';
+      issueNode.classList.remove('warn');
+      return;
+    }
+
+    issueNode.textContent = String(issueCount) + ' unresolved placeholder' + (issueCount > 1 ? 's' : '');
+    issueNode.classList.add('warn');
+  }
+
   async function postForm(url, bodyObj) {
     const response = await fetch(url, {
       method: 'POST',
@@ -131,6 +169,7 @@
       if (publishTopic && !publishTopic.value.trim() && data.subscribeAlarmTopic) {
         publishTopic.value = data.subscribeAlarmTopic;
       }
+      markPlaceholderIssues();
     } catch (error) {
       showMessage('Broker data refresh failed: ' + error.message, true);
     }

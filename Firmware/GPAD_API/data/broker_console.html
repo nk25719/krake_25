@@ -129,6 +129,11 @@
       word-break: break-all;
     }
 
+    .value.warn {
+      color: #7b1a32;
+      font-weight: 700;
+    }
+
     @media (min-width: 980px) {
       .console-grid {
         grid-template-columns: 1fr 1fr;
@@ -228,22 +233,23 @@
       </section>
 
       <section class="card">
-        <h1>Device Info</h1>
-        <p class="subtitle">Optional status fields from your firmware placeholders or template engine.</p>
+        <h1>Troubleshoot Device Info</h1>
+        <p class="subtitle">Live values help verify that template placeholders are being populated in Broker Console.</p>
 
         <div class="info-block">
-          <div class="info-row"><span class="label">Serial</span><span class="value">%SERIAL%</span></div>
-          <div class="info-row"><span class="label">URL</span><span class="value">%URL%</span></div>
-          <div class="info-row"><span class="label">IP</span><span class="value">%IP%</span></div>
-          <div class="info-row"><span class="label">MAC</span><span class="value">%MAC%</span></div>
-          <div class="info-row"><span class="label">WiFi RSSI</span><span class="value">%RSSI%</span></div>
-          <div class="info-row"><span class="label">Uptime</span><span class="value">%UPTIME%</span></div>
+          <div class="info-row"><span class="label">Serial</span><span id="deviceSerial" class="value">%SERIAL%</span></div>
+          <div class="info-row"><span class="label">URL</span><span id="deviceUrl" class="value">%URL%</span></div>
+          <div class="info-row"><span class="label">IP</span><span id="deviceIp" class="value">%IP%</span></div>
+          <div class="info-row"><span class="label">MAC</span><span id="deviceMac" class="value">%MAC%</span></div>
+          <div class="info-row"><span class="label">WiFi RSSI</span><span id="deviceRssi" class="value">%RSSI%</span></div>
+          <div class="info-row"><span class="label">Uptime</span><span id="deviceUptime" class="value">%UPTIME%</span></div>
           <div class="info-row"><span class="label">MQTT</span><span id="mqttState" class="value">%MQTT%</span></div>
           <div class="info-row"><span class="label">Broker (live)</span><span id="brokerLive" class="value">-</span></div>
           <div class="info-row"><span class="label">Subscribe</span><span id="subTopicLive" class="value">-</span></div>
           <div class="info-row"><span class="label">Publish ACK</span><span id="ackTopicLive" class="value">-</span></div>
-          <div class="info-row"><span class="label">Firmware</span><span class="value">%FIRMWARE_VERSION%</span></div>
-          <div class="info-row"><span class="label">Compiled</span><span class="value">%COMPILED_AT%</span></div>
+          <div class="info-row"><span class="label">Firmware</span><span id="deviceFirmware" class="value">%FIRMWARE_VERSION%</span></div>
+          <div class="info-row"><span class="label">Compiled</span><span id="deviceCompiledAt" class="value">%COMPILED_AT%</span></div>
+          <div class="info-row"><span class="label">Placeholder issues</span><span id="deviceInfoIssues" class="value">Checking…</span></div>
         </div>
       </section>
 
