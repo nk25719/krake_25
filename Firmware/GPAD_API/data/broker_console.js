@@ -143,6 +143,10 @@
       if (brokerName) {
         brokerName.textContent = data.broker || brokerName.textContent;
       }
+      const deviceRole = byId('deviceRole');
+      if (deviceRole) {
+        deviceRole.textContent = data.role || 'Krake';
+      }
       const publishTopic = byId('publishTopic');
       if (publishTopic && !publishTopic.value.trim() && data.subscribeAlarmTopic) {
         publishTopic.value = data.subscribeAlarmTopic;

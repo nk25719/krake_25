@@ -60,11 +60,23 @@
 
     <section class="card">
       <h1>MQTT</h1>
-      <p class="subtitle">Edit broker and set extra topics to subscribe (comma-separated).</p>
+      <p class="subtitle">Edit broker, role, and runtime publish/subscribe topics. Saved to <code>/mqtt.json</code>.</p>
 
       <label for="broker">Broker</label>
       <input id="broker" class="text-input" placeholder="broker.hivemq.com" />
-      <button class="action-btn" onclick="saveBroker()">Save Broker</button>
+
+      <label for="mqttRole" style="margin-top:12px; display:block;">Device Role</label>
+      <select id="mqttRole" class="text-input">
+        <option value="Krake">Krake</option>
+        <option value="PMD">PMD</option>
+      </select>
+
+      <label for="subscribeTopic" style="margin-top:12px; display:block;">Subscribe Topic</label>
+      <input id="subscribeTopic" class="text-input" placeholder="AABBCCDDEEFF_ALM" />
+
+      <label for="publishTopic" style="margin-top:12px; display:block;">Publish Topic</label>
+      <input id="publishTopic" class="text-input" placeholder="AABBCCDDEEFF_ACK" />
+      <button class="action-btn" onclick="saveMqttConfig()">Save MQTT Config</button>
 
       <label for="topics" style="margin-top:12px; display:block;">Extra Subscribe Topics</label>
       <textarea id="topics" class="text-input" rows="3" placeholder="topic1,topic2"></textarea>
@@ -142,6 +154,9 @@
       if (!res.ok) throw new Error('Unable to load settings');
       const data = await res.json();
       document.getElementById('broker').value = data.broker || '';
+      document.getElementById('mqttRole').value = data.role || 'Krake';
+      document.getElementById('subscribeTopic').value = data.subscribeTopic || data.alarmTopic || '';
+      document.getElementById('publishTopic').value = data.publishTopic || data.ackTopic || '';
       document.getElementById('topics').value = data.extraTopics || '';
       document.getElementById('muteStatus').textContent = data.muted ? 'Muted' : 'Unmuted';
       document.getElementById('alarmTopic').textContent = data.alarmTopic || '-';
@@ -168,13 +183,17 @@
       }
     }
 
-    async function saveBroker() {
+    async function saveMqttConfig() {
       try {
         const broker = document.getElementById('broker').value.trim();
-        await postForm('/settings/broker', { broker });
-        showMessage('Broker updated and MQTT reconnected.');
+        const pub = document.getElementById('publishTopic').value.trim();
+        const sub = document.getElementById('subscribeTopic').value.trim();
+        const role = document.getElementById('mqttRole').value;
+        await postForm('/config', { broker, pub, sub, role });
+        showMessage('MQTT config updated and persisted.');
+        await refreshSettings();
       } catch (e) {
-        showMessage('Failed to save broker: ' + e.message, true);
+        showMessage('Failed to save MQTT config: ' + e.message, true);
       }
     }
 

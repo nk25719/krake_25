@@ -205,6 +205,10 @@ const char *mqtt_password = "public";
 #endif
 const size_t MQTT_BROKER_MAX_LEN = 64;
 char mqtt_broker_name[MQTT_BROKER_MAX_LEN] = {0};
+const char *MQTT_CONFIG_PATH = "/mqtt.json";
+const char *MQTT_ROLE_KRAKE = "Krake";
+const char *MQTT_ROLE_PMD = "PMD";
+char mqttRole[8] = "Krake";
 const uint8_t MAX_EXTRA_TOPICS = 4;
 const size_t MAX_TOPIC_LEN = 64;
 char subscribe_Extra_Topics[MAX_EXTRA_TOPICS][MAX_TOPIC_LEN];
@@ -242,6 +246,12 @@ const size_t MAC_ADDRESS_STRING_LENGTH = 13;
 char subscribe_Alarm_Topic[17];
 char publish_Ack_Topic[17];
 char macAddressString[MAC_ADDRESS_STRING_LENGTH];
+
+String defaultTopicForRole(const String &role, const String &macId, bool publishTopic);
+void setDefaultTopicsForRole(const String &role, const String &macId);
+bool saveMqttConfig();
+bool loadMqttConfig();
+String mqttConfigJson();
 
 #define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
 #define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
@@ -326,9 +336,11 @@ void publishOnLineMsg(void)
 #endif
 
     dtostrf(rssi, 1, 2, rssiString);
-    char onLineMsg[32] = " online, RSSI:";
-    strcat(onLineMsg, rssiString);
-    client.publish(publish_Ack_Topic, onLineMsg);
+    String onLineMsg = "online, role:";
+    onLineMsg += mqttRole;
+    onLineMsg += ", RSSI:";
+    onLineMsg += rssiString;
+    client.publish(publish_Ack_Topic, onLineMsg.c_str(), true);
 
     // This should be moved to a place after the WiFi connect success
     //  debugSerial.print("Device connected at IPaddress: "); //FLE
@@ -351,7 +363,9 @@ void reconnect()
     debugSerial.print("Attempting MQTT connection at: ");
     debugSerial.print(millis());
     debugSerial.print("..... ");
-    if (client.connect(COMPANY_NAME, mqtt_user, mqtt_password))
+    const String clientId = String(COMPANY_NAME) + "_" + String(macAddressString);
+    const String lwtMessage = "offline";
+    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, lwtMessage.c_str()))
     {
       debugSerial.print("success at: ");
       debugSerial.println(millis());
@@ -365,6 +379,11 @@ void reconnect()
       {
         client.subscribe(watchedTopics[i]);
       }
+      String presence = "online, role:";
+      presence += mqttRole;
+      presence += ", RSSI:";
+      presence += String(WiFi.RSSI());
+      client.publish(publish_Ack_Topic, presence.c_str(), true);
     }
     else
     {
@@ -616,6 +635,7 @@ String trackedKrakesJson()
   payload += jsonEscape(joinedWatchedTopics());
   payload += "\",\"mqttConnected\":" + String(client.connected() ? "true" : "false") + ",";
   payload += "\"broker\":\"" + jsonEscape(String(mqtt_broker_name)) + "\",";
+  payload += "\"role\":\"" + jsonEscape(String(mqttRole)) + "\",";
   payload += "\"subscribeAlarmTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
   payload += "\"publishAckTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
   payload += "\"krakes\":[";
@@ -742,6 +762,7 @@ bool applyBrokerSetting(const String &broker)
   {
     client.disconnect();
   }
+  saveMqttConfig();
   reconnect();
   return true;
 }
@@ -754,6 +775,44 @@ void applyExtraTopicsSetting(const String &topics)
     client.disconnect();
   }
   reconnect();
+}
+
+bool applyMqttConfig(const String &broker, const String &publishTopic, const String &subscribeTopic, const String &role)
+{
+  String normalizedBroker = broker;
+  String normalizedPublish = publishTopic;
+  String normalizedSubscribe = subscribeTopic;
+  const String normalizedRole = normalizeRole(role);
+  normalizedBroker.trim();
+  normalizedPublish.trim();
+  normalizedSubscribe.trim();
+
+  if (normalizedBroker.length() == 0 || normalizedBroker.length() >= MQTT_BROKER_MAX_LEN)
+  {
+    return false;
+  }
+  if (normalizedPublish.length() == 0 || normalizedPublish.length() >= sizeof(publish_Ack_Topic))
+  {
+    return false;
+  }
+  if (normalizedSubscribe.length() == 0 || normalizedSubscribe.length() >= sizeof(subscribe_Alarm_Topic))
+  {
+    return false;
+  }
+
+  normalizedBroker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
+  normalizedPublish.toCharArray(publish_Ack_Topic, sizeof(publish_Ack_Topic));
+  normalizedSubscribe.toCharArray(subscribe_Alarm_Topic, sizeof(subscribe_Alarm_Topic));
+  normalizedRole.toCharArray(mqttRole, sizeof(mqttRole));
+
+  client.setServer(mqtt_broker_name, 1883);
+  saveMqttConfig();
+  if (client.connected())
+  {
+    client.disconnect();
+  }
+  reconnect();
+  return true;
 }
 // Function to turn on all lamps
 void turnOnAllLamps()
@@ -850,6 +909,146 @@ String jsonEscape(const String &raw)
     escaped += c;
   }
   return escaped;
+}
+
+String parseJsonStringField(const String &json, const char *key)
+{
+  const String quotedKey = "\"" + String(key) + "\"";
+  const int keyPos = json.indexOf(quotedKey);
+  if (keyPos < 0)
+  {
+    return "";
+  }
+  int colonPos = json.indexOf(':', keyPos + quotedKey.length());
+  if (colonPos < 0)
+  {
+    return "";
+  }
+  int firstQuote = json.indexOf('"', colonPos + 1);
+  if (firstQuote < 0)
+  {
+    return "";
+  }
+  String value;
+  bool escaped = false;
+  for (int i = firstQuote + 1; i < (int)json.length(); i++)
+  {
+    const char c = json.charAt(i);
+    if (escaped)
+    {
+      value += c;
+      escaped = false;
+      continue;
+    }
+    if (c == '\\')
+    {
+      escaped = true;
+      continue;
+    }
+    if (c == '"')
+    {
+      return value;
+    }
+    value += c;
+  }
+  return "";
+}
+
+String normalizeRole(const String &rawRole)
+{
+  String role = rawRole;
+  role.trim();
+  if (role.equalsIgnoreCase(MQTT_ROLE_PMD))
+  {
+    return String(MQTT_ROLE_PMD);
+  }
+  return String(MQTT_ROLE_KRAKE);
+}
+
+String defaultTopicForRole(const String &role, const String &macId, bool publishTopic)
+{
+  const bool isPmd = role.equalsIgnoreCase(MQTT_ROLE_PMD);
+  const char *suffix = publishTopic ? (isPmd ? "_ALM" : "_ACK") : (isPmd ? "_ACK" : "_ALM");
+  return macId + suffix;
+}
+
+void setDefaultTopicsForRole(const String &role, const String &macId)
+{
+  const String subscribeTopic = defaultTopicForRole(role, macId, false);
+  const String publishTopic = defaultTopicForRole(role, macId, true);
+  subscribeTopic.toCharArray(subscribe_Alarm_Topic, sizeof(subscribe_Alarm_Topic));
+  publishTopic.toCharArray(publish_Ack_Topic, sizeof(publish_Ack_Topic));
+}
+
+String mqttConfigJson()
+{
+  String payload = "{";
+  payload += "\"broker\":\"" + jsonEscape(String(mqtt_broker_name)) + "\",";
+  payload += "\"publishTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
+  payload += "\"subscribeTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
+  payload += "\"role\":\"" + jsonEscape(String(mqttRole)) + "\"";
+  payload += "}";
+  return payload;
+}
+
+bool saveMqttConfig()
+{
+  File file = LittleFS.open(MQTT_CONFIG_PATH, "w");
+  if (!file)
+  {
+    return false;
+  }
+  const String payload = mqttConfigJson();
+  const size_t written = file.print(payload);
+  file.close();
+  return written == payload.length();
+}
+
+bool loadMqttConfig()
+{
+  if (!LittleFS.exists(MQTT_CONFIG_PATH))
+  {
+    return false;
+  }
+  File file = LittleFS.open(MQTT_CONFIG_PATH, "r");
+  if (!file)
+  {
+    return false;
+  }
+  const String content = file.readString();
+  file.close();
+  if (content.length() == 0)
+  {
+    return false;
+  }
+
+  String broker = parseJsonStringField(content, "broker");
+  String publishTopic = parseJsonStringField(content, "publishTopic");
+  String subscribeTopic = parseJsonStringField(content, "subscribeTopic");
+  const String role = normalizeRole(parseJsonStringField(content, "role"));
+
+  broker.trim();
+  publishTopic.trim();
+  subscribeTopic.trim();
+
+  if (broker.length() == 0 || broker.length() >= MQTT_BROKER_MAX_LEN)
+  {
+    return false;
+  }
+  if (publishTopic.length() == 0 || publishTopic.length() >= sizeof(publish_Ack_Topic))
+  {
+    return false;
+  }
+  if (subscribeTopic.length() == 0 || subscribeTopic.length() >= sizeof(subscribe_Alarm_Topic))
+  {
+    return false;
+  }
+
+  broker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
+  publishTopic.toCharArray(publish_Ack_Topic, sizeof(publish_Ack_Topic));
+  subscribeTopic.toCharArray(subscribe_Alarm_Topic, sizeof(subscribe_Alarm_Topic));
+  role.toCharArray(mqttRole, sizeof(mqttRole));
+  return true;
 }
 
 String uptimeString()
@@ -1034,10 +1233,34 @@ void setupOTA()
               payload += "\"broker\":\"" + jsonEscape(String(mqtt_broker_name)) + "\",";
               payload += "\"alarmTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
               payload += "\"ackTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
+              payload += "\"subscribeTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
+              payload += "\"publishTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
+              payload += "\"role\":\"" + jsonEscape(String(mqttRole)) + "\",";
               payload += "\"extraTopics\":\"" + jsonEscape(joinedExtraTopics()) + "\",";
               payload += "\"muted\":" + String(isMuted() ? "true" : "false");
               payload += "}";
               request->send(200, "application/json", payload); });
+
+  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request)
+            { request->send(200, "application/json", mqttConfigJson()); });
+
+  server.on("/config", HTTP_POST, [](AsyncWebServerRequest *request)
+            {
+              if (!request->hasParam("broker", true) || !request->hasParam("pub", true) || !request->hasParam("sub", true) || !request->hasParam("role", true))
+              {
+                request->send(400, "text/plain", "missing broker/pub/sub/role");
+                return;
+              }
+              const String broker = request->getParam("broker", true)->value();
+              const String pub = request->getParam("pub", true)->value();
+              const String sub = request->getParam("sub", true)->value();
+              const String role = request->getParam("role", true)->value();
+              if (!applyMqttConfig(broker, pub, sub, role))
+              {
+                request->send(400, "text/plain", "invalid mqtt config");
+                return;
+              }
+              request->send(200, "application/json", mqttConfigJson()); });
 
   server.on("/settings/mute", HTTP_POST, [](AsyncWebServerRequest *request)
             {
@@ -1213,10 +1436,11 @@ void setup()
   debugSerial.setTimeout(SERIAL_TIMEOUT_MS);
   strncpy(mqtt_broker_name, DEFAULT_MQTT_BROKER_NAME, MQTT_BROKER_MAX_LEN - 1);
   mqtt_broker_name[MQTT_BROKER_MAX_LEN - 1] = '\0';
+  strncpy(mqttRole, MQTT_ROLE_KRAKE, sizeof(mqttRole) - 1);
+  mqttRole[sizeof(mqttRole) - 1] = '\0';
   clearExtraTopics();
   clearTrackedKrakes();
   clearWatchedTopics();
-  client.setServer(mqtt_broker_name, 1883); // Default MQTT port, this is a TCP port.
   client.setCallback(callback);
 
 #if (DEBUG > 0)
@@ -1253,12 +1477,16 @@ void setup()
 
   strcpy(macAddressString, buff);
   macAddressString[12] = '\0';
-  strcpy(subscribe_Alarm_Topic, buff);
-  strcpy(publish_Ack_Topic, buff);
-  strcpy(subscribe_Alarm_Topic + 12, "_ALM");
-  strcpy(publish_Ack_Topic + 12, "_ACK");
-  subscribe_Alarm_Topic[16] = '\0';
-  publish_Ack_Topic[16] = '\0';
+  setDefaultTopicsForRole(String(mqttRole), String(macAddressString));
+  if (loadMqttConfig())
+  {
+    debugSerial.println(F("Loaded MQTT config from /mqtt.json"));
+  }
+  else
+  {
+    saveMqttConfig();
+  }
+  client.setServer(mqtt_broker_name, 1883); // Default MQTT port, this is a TCP port.
 
 #if (DEBUG > 1)
   debugSerial.println("XXXXXXX");
