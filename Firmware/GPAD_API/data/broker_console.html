@@ -170,6 +170,31 @@
 
     <div class="console-grid">
       <section class="card">
+        <h1>MQTT Runtime Config</h1>
+        <p class="subtitle">Update broker, pub/sub topics, and device role. Saved to <code>/mqtt.json</code> and applied immediately.</p>
+
+        <label for="cfgBroker">Broker</label>
+        <input id="cfgBroker" class="text-input" placeholder="broker.hivemq.com" />
+
+        <label for="cfgPubTopic">Publish topic</label>
+        <input id="cfgPubTopic" class="text-input" placeholder="AABBCCDDEEFF_ACK" />
+
+        <label for="cfgSubTopic">Subscribe topic</label>
+        <input id="cfgSubTopic" class="text-input" placeholder="AABBCCDDEEFF_ALM" />
+
+        <label for="cfgRole">Role</label>
+        <select id="cfgRole" class="text-input">
+          <option value="Krake">Krake</option>
+          <option value="PMD">PMD</option>
+        </select>
+
+        <div class="button-row">
+          <button id="btnSaveConfig" class="action-btn" type="button">Save Config</button>
+        </div>
+        <div class="status-row">Config result: <strong id="configResult">-</strong></div>
+      </section>
+
+      <section class="card">
         <h1>Send Message / Alarm</h1>
         <p class="subtitle">Publish MQTT payloads directly for test and validation workflows.</p>
 

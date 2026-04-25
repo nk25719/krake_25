@@ -30,6 +30,13 @@
     node.style.color = isError ? '#b00020' : '#146620';
   }
 
+  function setConfigResult(message, isError = false) {
+    const node = byId('configResult');
+    if (!node) return;
+    node.textContent = message;
+    node.style.color = isError ? '#b00020' : '#146620';
+  }
+
   async function postForm(url, bodyObj) {
     const response = await fetch(url, {
       method: 'POST',
@@ -143,6 +150,14 @@
       if (brokerName) {
         brokerName.textContent = data.broker || brokerName.textContent;
       }
+      const cfgBroker = byId('cfgBroker');
+      if (cfgBroker && !cfgBroker.value.trim()) cfgBroker.value = data.broker || '';
+      const cfgPubTopic = byId('cfgPubTopic');
+      if (cfgPubTopic && !cfgPubTopic.value.trim()) cfgPubTopic.value = data.publishAckTopic || '';
+      const cfgSubTopic = byId('cfgSubTopic');
+      if (cfgSubTopic && !cfgSubTopic.value.trim()) cfgSubTopic.value = data.subscribeAlarmTopic || '';
+      const cfgRole = byId('cfgRole');
+      if (cfgRole && data.role) cfgRole.value = data.role;
       const publishTopic = byId('publishTopic');
       if (publishTopic && !publishTopic.value.trim() && data.subscribeAlarmTopic) {
         publishTopic.value = data.subscribeAlarmTopic;
@@ -251,6 +266,27 @@
     }
   }
 
+  async function saveRuntimeConfig() {
+    const broker = (byId('cfgBroker')?.value || '').trim();
+    const pubTopic = (byId('cfgPubTopic')?.value || '').trim();
+    const subTopic = (byId('cfgSubTopic')?.value || '').trim();
+    const role = (byId('cfgRole')?.value || '').trim();
+
+    if (!broker || !pubTopic || !subTopic || !role) {
+      setConfigResult('All config fields are required.', true);
+      return;
+    }
+    try {
+      const result = await postForm('/config', { broker, pubTopic, subTopic, role });
+      setConfigResult(result || 'Saved');
+      showMessage('MQTT runtime config updated.');
+      await refreshBrokerData();
+    } catch (error) {
+      setConfigResult(error.message, true);
+      showMessage('Config update failed: ' + error.message, true);
+    }
+  }
+
   function setupTemplates() {
     byId('btnUseAlm').addEventListener('click', () => {
       const base = parsePrimaryId(byId('publishTopic').value.trim()).replace(/[^A-Za-z0-9]/g, '');
@@ -299,6 +335,10 @@
     const sendWebBtn = byId('btnSendWebMessage');
     if (sendWebBtn) {
       sendWebBtn.addEventListener('click', sendWebMessage);
+    }
+    const saveCfgBtn = byId('btnSaveConfig');
+    if (saveCfgBtn) {
+      saveCfgBtn.addEventListener('click', saveRuntimeConfig);
     }
 
     byId('btnCopyWatch').addEventListener('click', async () => {
