@@ -1330,6 +1330,9 @@ void setupOTA()
   server.on("/PMD_GPAD_API.html", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->send(LittleFS, "/PMD_GPAD_API.html", "text/html"); });
 
+  server.on("/online-devices", HTTP_GET, [](AsyncWebServerRequest *request)
+            { request->send(LittleFS, "/online_devices.html", "text/html"); });
+
   server.on("/settings-data", HTTP_GET, [](AsyncWebServerRequest *request)
             {
               String payload = "{";

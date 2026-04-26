@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Online Devices</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 920px; }
+    th, td { text-align: left; border-bottom: 1px solid #d8e7de; padding: 10px 8px; }
+    th { background: #f3f9f5; font-size: .85rem; color: #3c6250; text-transform: uppercase; letter-spacing: .03em; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: .8rem; font-weight: 700; }
+    .ok { background: #dff4e5; color: #14582c; }
+    .warn { background: #fff3dc; color: #8a5a00; }
+    .err { background: #fde5ea; color: #8a1430; }
+    .muted { color: #567665; }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="/favicon.png" alt="KRAKE icon" class="brand-icon"><span>Online Devices</span></div>
+  <button id="menuToggle" class="menu-toggle" aria-label="Open menu">☰</button>
+</header>
+
+<nav id="sideMenu" class="side-menu">
+  <a href="/update">Update Firmware</a>
+  <a href="/GDT_TrackHistory.html">GDT Track Record</a>
+  <a href="/Electrical_testHistory.html">Electrical Test History</a>
+  <a href="/monitor">Factory Test / Developer Monitor</a>
+  <a href="/PMD_GPAD_API">PMD Web UI</a>
+  <a href="/online-devices">Online Devices</a>
+  <a href="/manual">User Manual</a>
+  <a href="/settings">Settings</a>
+  <a class="menu-home" href="/index.html">Home</a>
+</nav>
+
+<main class="container">
+  <section class="card">
+    <h1>Detected Krake devices</h1>
+    <p class="subtitle">Live view of devices publishing on <code>_ACK</code> and participating on <code>_ALM</code> topic traffic.</p>
+    <div class="info-grid">
+      <p class="info-row"><span class="label">Broker</span><span id="brokerName">-</span></p>
+      <p class="info-row"><span class="label">Controller role</span><span id="controllerRole">-</span></p>
+      <p class="info-row"><span class="label">Configured ALM publish topics</span><span id="almTopicCount">0</span></p>
+      <p class="info-row"><span class="label">Last refresh</span><span id="lastRefresh">-</span></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+        <tr>
+          <th>Device ID</th>
+          <th>Online</th>
+          <th>Publishing ACK (<code>ID_ACK</code>)</th>
+          <th>ALM Topic Configured</th>
+          <th>ALM Topic Activity</th>
+          <th>ACK Topic</th>
+          <th>ALM Topic</th>
+          <th>Last Topic Seen</th>
+          <th>Seconds Since ACK</th>
+          <th>Seconds Since ALM Activity</th>
+        </tr>
+        </thead>
+        <tbody id="rows">
+        <tr><td colspan="10" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer class="footer"><div id="message" class="note"></div></footer>
+
+<script>
+  const byId = (id) => document.getElementById(id);
+
+  function toggleMenu() { byId('sideMenu').classList.toggle('open'); }
+  byId('menuToggle').addEventListener('click', toggleMenu);
+
+  function csvToSet(csv) {
+    return new Set((csv || '').split(',').map((x) => x.trim()).filter(Boolean));
+  }
+
+  function badge(ok, okLabel = 'YES', noLabel = 'NO') {
+    const cls = ok ? 'ok' : 'err';
+    const txt = ok ? okLabel : noLabel;
+    return '<span class="badge ' + cls + '">' + txt + '</span>';
+  }
+
+  function boolCell(ok, yes = 'YES', no = 'NO') {
+    return '<td>' + badge(ok, yes, no) + '</td>';
+  }
+
+  function fmtSeconds(v) {
+    if (typeof v !== 'number' || v < 0) return '-';
+    return String(v);
+  }
+
+  function renderRows(data) {
+    const rows = byId('rows');
+    const krakes = Array.isArray(data.krakes) ? data.krakes : [];
+    const publishTopics = csvToSet(data.publishTopics);
+    byId('almTopicCount').textContent = String([...publishTopics].filter((t) => t.endsWith('_ALM')).length);
+
+    if (!krakes.length) {
+      rows.innerHTML = '<tr><td colspan="10" class="muted">No devices detected yet. Wait for ACK traffic.</td></tr>';
+      return;
+    }
+
+    const html = krakes.map((k) => {
+      const id = String(k.id || '').toUpperCase();
+      const ackTopic = id ? id + '_ACK' : '-';
+      const almTopic = id ? id + '_ALM' : '-';
+      const ackPublishing = !!k.online;
+      const almConfigured = publishTopics.has(almTopic);
+      const almActivity = !!k.topicParticipant;
+      return '<tr>' +
+        '<td><strong>' + (id || '-') + '</strong></td>' +
+        boolCell(!!k.online, 'ONLINE', 'OFFLINE') +
+        boolCell(ackPublishing, 'SEEN', 'NOT SEEN') +
+        boolCell(almConfigured, 'CONFIGURED', 'MISSING') +
+        boolCell(almActivity, 'SEEN', 'NOT SEEN') +
+        '<td><code>' + ackTopic + '</code></td>' +
+        '<td><code>' + almTopic + '</code></td>' +
+        '<td><code>' + (k.lastTopic || '-') + '</code></td>' +
+        '<td>' + fmtSeconds(k.secondsSinceStatus) + '</td>' +
+        '<td>' + fmtSeconds(k.secondsSinceTopic) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    rows.innerHTML = html;
+  }
+
+  async function refresh() {
+    const msg = byId('message');
+    try {
+      const r = await fetch('/broker-console/data', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      byId('brokerName').textContent = data.broker || '-';
+      byId('controllerRole').textContent = data.role || '-';
+      byId('lastRefresh').textContent = new Date().toLocaleTimeString();
+      renderRows(data);
+      msg.textContent = 'Live data refreshed.';
+      msg.style.color = '#146620';
+    } catch (e) {
+      msg.textContent = 'Refresh failed: ' + e.message;
+      msg.style.color = '#b00020';
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>
