@@ -157,7 +157,7 @@ Date: 20241023
 	<h2>Setup MQTT Broker</h2>
 	<form>
 		<label for="brokerURL">Broker URL :</label>
-		<input type="text" value="public.cloud.shftr.io" id="nameBroker" name="nameBroker" required minlength="4" maxlength="100" size="50" />
+		<input type="text" value="public.cloud.shiftr.io" id="nameBroker" name="nameBroker" required minlength="4" maxlength="100" size="50" />
 		<br>
 		<label for="brokerPort">Broker Port :</label>
 		<input type="number" value="1883" id="brokerPort" name="brokerPort" min="1" max="65535" step="1" />
@@ -228,11 +228,17 @@ Date: 20241023
 	<h6> 	Public Invention,  LICENSE "GNU Affero General Public License, version 3 " </h6>
 
     <script>
-        let topic = "PLACEHOLDER TOPIC";
-        let brokerURL = 'public.cloud.shftr.io';
-        let brokerPort = '1883';
-        let brokerUser = 'public';
-        let brokerPassword = 'public';
+        const PLACEHOLDER_TOPIC = "PLACEHOLDER TOPIC";
+        const DEFAULT_BROKER_URL = 'public.cloud.shiftr.io';
+        const DEFAULT_BROKER_PORT = '1883';
+        const DEFAULT_BROKER_USER = 'public';
+        const DEFAULT_BROKER_PASSWORD = 'public';
+
+        let topic = PLACEHOLDER_TOPIC;
+        let brokerURL = DEFAULT_BROKER_URL;
+        let brokerPort = DEFAULT_BROKER_PORT;
+        let brokerUser = DEFAULT_BROKER_USER;
+        let brokerPassword = DEFAULT_BROKER_PASSWORD;
 
         let client = null;
         let mqttConnected = false;
@@ -250,6 +256,15 @@ Date: 20241023
         function refreshSubscribedTopicsUi() {
             const topicList = Array.from(subscribedTopics);
             document.getElementById('subscribedTopics').innerText = `Subscribed Topics: ${topicList.length ? topicList.join(", ") : "none"}`;
+        }
+
+        function setMqttState({ connected = mqttConnected, connecting = mqttConnecting } = {}) {
+            mqttConnected = connected;
+            mqttConnecting = connecting;
+        }
+
+        function getTrimmedInputValue(selector) {
+            return $(selector).val().trim();
         }
 
         function updateConnectionStatus(statusText, stateClass = "disconnected") {
@@ -331,6 +346,12 @@ Date: 20241023
             });
         }
 
+        function resetMqttSession() {
+            setMqttState({ connected: false, connecting: false });
+            subscribedTopics.clear();
+            refreshSubscribedTopicsUi();
+        }
+
         function connectMqtt() {
             if (mqttConnected) {
                 logTerminal("already connected");
@@ -350,7 +371,7 @@ Date: 20241023
                 return;
             }
 
-            mqttConnecting = true;
+            setMqttState({ connecting: true });
             updateConnectionStatus("connecting...", "connecting");
             logTerminal(`connecting to ${wsUrl}`);
 
@@ -363,15 +384,14 @@ Date: 20241023
             });
 
             client.on('connect', function () {
-                mqttConnecting = false;
-                mqttConnected = true;
+                setMqttState({ connected: true, connecting: false });
                 updateConnectionStatus(`connected (${wsUrl})`, "connected");
                 logTerminal("connected");
                 subscribeToCurrentTopics();
             });
 
             client.on('reconnect', function () {
-                mqttConnecting = true;
+                setMqttState({ connected: false, connecting: true });
                 updateConnectionStatus('reconnecting...', 'connecting');
                 logTerminal('reconnecting...');
             });
@@ -385,10 +405,7 @@ Date: 20241023
             });
 
             client.on('close', function () {
-                mqttConnecting = false;
-                mqttConnected = false;
-                subscribedTopics.clear();
-                refreshSubscribedTopicsUi();
+                resetMqttSession();
                 updateConnectionStatus("disconnected", "disconnected");
                 logTerminal("connection closed");
             });
@@ -405,10 +422,10 @@ Date: 20241023
         }
 
         function setBroker() {
-            brokerURL = $("#nameBroker").val().trim();
-            brokerPort = $("#brokerPort").val().trim();
-            brokerUser = $("#username").val().trim();
-            brokerPassword = $("#password").val().trim();
+            brokerURL = getTrimmedInputValue("#nameBroker");
+            brokerPort = getTrimmedInputValue("#brokerPort");
+            brokerUser = getTrimmedInputValue("#username");
+            brokerPassword = getTrimmedInputValue("#password");
             logTerminal(`broker set: ${brokerURL}:${brokerPort || "(default)"}, user: ${brokerUser || "(none)"}`);
             if (mqttConnected || mqttConnecting) {
                 disconnectMqtt();
@@ -418,7 +435,7 @@ Date: 20241023
 
 
         function setTopic() {
-            const newTopic = $("#nameTopic").val().trim();
+            const newTopic = getTrimmedInputValue("#nameTopic");
             if (!newTopic) {
                 logTerminal("topic set FAILED: empty topic");
                 return;
@@ -446,7 +463,7 @@ Date: 20241023
         }
 
         async function publishEmergency(level) {
-            if (!topic || topic.includes("PLACEHOLDER")) {
+            if (!topic || topic.includes(PLACEHOLDER_TOPIC)) {
                 logTerminal("publish blocked: set a valid topic first");
                 return;
             }
