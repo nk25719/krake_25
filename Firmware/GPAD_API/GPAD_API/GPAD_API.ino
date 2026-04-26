@@ -599,7 +599,13 @@ void clearWatchedTopics()
 
 bool setWatchedTopics(const String &rawTopics)
 {
-  clearWatchedTopics();
+  char parsedTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
+  uint8_t parsedCount = 0;
+  for (uint8_t i = 0; i < MAX_WATCH_TOPICS; i++)
+  {
+    parsedTopics[i][0] = '\0';
+  }
+
   String token = "";
   for (size_t i = 0; i <= rawTopics.length(); i++)
   {
@@ -609,17 +615,39 @@ bool setWatchedTopics(const String &rawTopics)
       token.trim();
       if (token.length() > 0)
       {
-        if (token.length() >= MAX_TOPIC_LEN || watchedTopicCount >= MAX_WATCH_TOPICS)
+        if (token.length() >= MAX_TOPIC_LEN || parsedCount >= MAX_WATCH_TOPICS)
         {
           return false;
         }
-        token.toCharArray(watchedTopics[watchedTopicCount], MAX_TOPIC_LEN);
-        watchedTopicCount++;
+
+        bool duplicate = false;
+        for (uint8_t j = 0; j < parsedCount; j++)
+        {
+          if (token.equals(parsedTopics[j]))
+          {
+            duplicate = true;
+            break;
+          }
+        }
+
+        if (!duplicate)
+        {
+          token.toCharArray(parsedTopics[parsedCount], MAX_TOPIC_LEN);
+          parsedCount++;
+        }
       }
       token = "";
       continue;
     }
     token += c;
+  }
+
+  clearWatchedTopics();
+  watchedTopicCount = parsedCount;
+  for (uint8_t i = 0; i < parsedCount; i++)
+  {
+    strncpy(watchedTopics[i], parsedTopics[i], MAX_TOPIC_LEN - 1);
+    watchedTopics[i][MAX_TOPIC_LEN - 1] = '\0';
   }
   return true;
 }
