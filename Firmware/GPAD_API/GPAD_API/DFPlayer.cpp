@@ -191,9 +191,7 @@ void setupDFPlayer(bool skipSplash)
   delay(100);  // allow module to settle before querying state
   int moduleState = dfPlayer.readState();
   if (moduleState < 0) {
-    Serial.println("DFPlayer: no response to readState() -- module absent or UART noise. Disabling audio.");
-    isDFPlayerDetected = false;
-    return;
+    Serial.println("DFPlayer: readState() not supported (likely MP3-TF-16P). Continuing with audio enabled.");
   }
   if (moduleState > 0) {
     Serial.println("DFPlayer Mini detected!");
@@ -217,7 +215,10 @@ void setupDFPlayer(bool skipSplash)
   delay(1000);
   dfPlayer.previous();
   delay(1500);
-  dfPlayer.play(); // DFPlayer Splash
+  if (!skipSplash)
+  {
+    dfPlayer.play(); // DFPlayer Splash
+  }
   Serial.println("DFPlayer / played");
   displayDFPlayerStats();
 
