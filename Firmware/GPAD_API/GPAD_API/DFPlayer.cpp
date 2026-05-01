@@ -134,11 +134,12 @@ void checkSerial(void)
 // Returns true if the module replies, false if unresponsive.
 bool dfPlayerResponding()
 {
-  int c = dfPlayer.readFileCounts();
-  if (c >= 0) return true;
+  // readState() is lighter than readFileCounts() and works while audio is playing.
+  int state = dfPlayer.readState();
+  if (state >= 0) return true;
   delay(150);
-  c = dfPlayer.readFileCounts();
-  return (c >= 0);
+  state = dfPlayer.readState();
+  return (state >= 0);
 }
 
 // Tear down the UART session and re-run setupDFPlayer() to recover a hung module.
@@ -316,9 +317,11 @@ void dfPlayerUpdate(void)
   if (!isDFPlayerDetected) return;
 
   // Periodic health check every 10 seconds: ping the module and reset if hung.
-  static unsigned long healthTimer = millis();
+  // Only probe when BUSY is HIGH (idle). Querying while BUSY can cause false negatives.
+  static unsigned long healthTimer = 0;
   const unsigned long healthInterval = 10000;
-  if (millis() - healthTimer > healthInterval)
+  if (healthTimer == 0) healthTimer = millis();
+  if ((millis() - healthTimer > healthInterval) && (HIGH == digitalRead(nDFPlayer_BUSY)))
   {
     healthTimer = millis();
     if (!dfPlayerResponding())
