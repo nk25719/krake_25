@@ -53,6 +53,13 @@ void updateRotator()
         // Serial.println(CW);
         registerRotationEvent(CW);
         pos = newPos;
+
+        // Keep tracked position bounded to avoid long-run overflow drift.
+        if (pos > 32760 || pos < -32760)
+        {
+            pos = 0;
+            encoder->setPosition(0);
+        }
     }
 }
 

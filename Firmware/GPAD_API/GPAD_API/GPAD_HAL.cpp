@@ -162,6 +162,20 @@ unsigned int multiHitTime = 400;
 
 DailyStruggleButton muteButton;
 DailyStruggleButton encoderSwitchButton;
+volatile bool encoderReleased = false;
+
+static void handleEncoderSelect()
+{
+  if (local_ptr_to_serial != nullptr)
+  {
+    local_ptr_to_serial->println(F("Before handleEncoderSelect"));
+  }
+  registerRotaryEncoderPress();
+  if (local_ptr_to_serial != nullptr)
+  {
+    local_ptr_to_serial->println(F("After handleEncoderSelect"));
+  }
+}
 
 extern const char *AlarmNames[];
 extern AlarmLevel currentLevel;
@@ -350,18 +364,11 @@ void encoderSwitchCallback(byte buttonEvent)
   switch (buttonEvent)
   {
   case onPress:
-    // Do something...
-    local_ptr_to_serial->println(F("ENCODER_SWITCH onPress"));
-    // currentlyMuted = !currentlyMuted;
-    // start_of_song = millis();
-    // annunciateAlarmLevel(local_ptr_to_serial);
-    // printAlarmState(local_ptr_to_serial);
-
-    registerRotaryEncoderPress();
+    // Intentionally empty: keep callback non-blocking.
     break;
   case onRelease:
-    // Do nothing...
-    local_ptr_to_serial->println(F("ENCODER_SWITCH onRelease"));
+    // ISR/callback safety: only set a flag.
+    encoderReleased = true;
     break;
   case onHold:
     // Do nothing...
@@ -733,6 +740,14 @@ void GPAD_HAL_loop()
 #endif
 
   muteTimeoutWatchdog(local_ptr_to_serial);
+
+  if (encoderReleased)
+  {
+    encoderReleased = false;
+    handleEncoderSelect();
+  }
+
+  yield();
 }
 
 /* Assumes LCD has been initilized
