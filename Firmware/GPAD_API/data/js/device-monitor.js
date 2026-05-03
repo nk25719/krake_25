@@ -1,8 +1,10 @@
 KrakeUI.mountLayout('MQTT Device Monitor');
 // Krake / PMD browser MQTT monitor using the same methodology as PMD_Processing_MQTT.pde
-// Method: MAC dictionary -> subscribe to <MAC>_ACK, <MAC>_ALM, <MAC>_STATUS, <MAC>_HEARTBEAT -> update last seen.
+// Method: MAC dictionary + topic suffix list -> subscribe using generated topic map -> update last seen.
 
 const OFFLINE_AFTER_MS = 30_000;
+const MONITOR_TOPIC_SUFFIXES = ["ACK", "STATUS", "HEARTBEAT"];
+
 let client = null;
 let messageCount = 0;
 
@@ -154,13 +156,21 @@ function connect() {
     setBrokerStatus(true);
     log(`Connected as ${clientId}`);
 
+    const subscriptions = {};
+
     for (const mac of Object.keys(macToName)) {
-      // Existing Processing sketch listens to ACK. Extra status/heartbeat topics make online tracking stronger.
-      client.subscribe(`${mac}_ACK`, { qos: 0 });
-      client.subscribe(`${mac}_ALM`, { qos: 0 });
-      client.subscribe(`${mac}_STATUS`, { qos: 0 });
-      client.subscribe(`${mac}_HEARTBEAT`, { qos: 0 });
+      for (const suffix of MONITOR_TOPIC_SUFFIXES) {
+        subscriptions[`${mac}_${suffix}`] = { qos: 0 };
+      }
     }
+
+    client.subscribe(subscriptions, (err) => {
+      if (err) {
+        log(`Subscription error: ${err.message}`);
+        return;
+      }
+      log(`Subscribed to ${Object.keys(subscriptions).length} monitor topics (${MONITOR_TOPIC_SUFFIXES.join(", ")})`);
+    });
   });
 
   client.on("message", (topic, payloadBuffer) => {
