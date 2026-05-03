@@ -1,6 +1,6 @@
 KrakeUI.mountLayout('MQTT Device Monitor');
 // Krake / PMD browser MQTT monitor using the same methodology as PMD_Processing_MQTT.pde
-// Method: MAC dictionary -> subscribe to <MAC>_ACK, <MAC>_ALM, <MAC>_STATUS, <MAC>_HEARTBEAT -> update last seen.
+// Method: MAC dictionary + configurable suffix list (or wildcard mode) -> update last seen with less broker chatter.
 
 const OFFLINE_AFTER_MS = 30_000;
 let client = null;
@@ -55,6 +55,33 @@ const devices = Object.fromEntries(
 );
 
 const $ = (id) => document.getElementById(id);
+
+const monitorTopicSuffixes = ["ACK", "ALM", "STATUS", "HEARTBEAT"];
+// "suffixes" subscribes only to known suffixes per MAC; "wildcard" subscribes once and filters in JS.
+const subscriptionMode = "wildcard";
+
+function topicIsTracked(topic) {
+  const clean = normalizeTopic(topic);
+  const parts = clean.split("_");
+  if (parts.length < 2) return false;
+  const suffix = parts[parts.length - 1].toUpperCase();
+  return monitorTopicSuffixes.includes(suffix);
+}
+
+function subscribeToDeviceTopics() {
+  if (subscriptionMode === "wildcard") {
+    client.subscribe("+", { qos: 0 });
+    log(`Subscribed in wildcard mode (+). Tracking suffixes: ${monitorTopicSuffixes.join(", ")}`);
+    return;
+  }
+
+  for (const mac of Object.keys(macToName)) {
+    for (const suffix of monitorTopicSuffixes) {
+      client.subscribe(`${mac}_${suffix}`, { qos: 0 });
+    }
+  }
+  log(`Subscribed to ${Object.keys(macToName).length * monitorTopicSuffixes.length} MAC+suffix topics.`);
+}
 
 function log(line) {
   const stamp = new Date().toLocaleString();
@@ -154,17 +181,12 @@ function connect() {
     setBrokerStatus(true);
     log(`Connected as ${clientId}`);
 
-    for (const mac of Object.keys(macToName)) {
-      // Existing Processing sketch listens to ACK. Extra status/heartbeat topics make online tracking stronger.
-      client.subscribe(`${mac}_ACK`, { qos: 0 });
-      client.subscribe(`${mac}_ALM`, { qos: 0 });
-      client.subscribe(`${mac}_STATUS`, { qos: 0 });
-      client.subscribe(`${mac}_HEARTBEAT`, { qos: 0 });
-    }
+    subscribeToDeviceTopics();
   });
 
   client.on("message", (topic, payloadBuffer) => {
     const payload = payloadBuffer.toString();
+    if (!topicIsTracked(topic)) return;
     const mac = macFromTopic(topic);
     if (!mac) return;
     markSeen(mac, topic, payload);
