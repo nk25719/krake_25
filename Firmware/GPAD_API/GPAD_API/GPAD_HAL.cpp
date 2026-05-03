@@ -163,7 +163,7 @@ unsigned int multiHitTime = 400;
 DailyStruggleButton muteButton;
 DailyStruggleButton encoderSwitchButton;
 volatile bool encoderReleased = false;
-extern Stream *local_ptr_to_serial;
+static Stream *local_ptr_to_serial = nullptr;
 
 static void handleEncoderSelect()
 {
@@ -237,8 +237,6 @@ const unsigned long INF_DURATION = 4294967295;
 // Allow indexing to LIGHT[] by symbolic name. So LIGHT0 is first and so on.
 int LIGHT[] = {LIGHT0, LIGHT1, LIGHT2, LIGHT3, LIGHT4};
 int NUM_LIGHTS = sizeof(LIGHT) / sizeof(LIGHT[0]);
-
-Stream *local_ptr_to_serial;
 
 volatile boolean isReceived_SPI;
 volatile byte peripheralReceived;
@@ -378,23 +376,16 @@ void encoderSwitchCallback(byte buttonEvent)
     // onLongPress is indidcated when you hold onto the button
   // more than longPressTime in milliseconds
   case onLongPress:
-    Serial.print("ENCODER_SWITCH Button Long Pressed For ");
-    Serial.print(longPressTime);
-    Serial.println("ms");
+    // Intentionally empty.
     break;
 
   // onMultiHit is indicated when you hit the button
   // multiHitTarget times within multihitTime in milliseconds
   case onMultiHit:
-    Serial.print("Encoder Switch Button Pressed ");
-    Serial.print(multiHitTarget);
-    Serial.print(" times in ");
-    Serial.print(multiHitTime);
-    Serial.println("ms");
+    // Intentionally empty.
     break;
   default:
-    Serial.print("Encoder Switch buttonEvent but not reckognized case: ");
-    Serial.println(buttonEvent);
+    // Intentionally empty.
     break;
   }
 }
