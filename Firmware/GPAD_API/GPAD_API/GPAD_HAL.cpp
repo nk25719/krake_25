@@ -31,6 +31,7 @@
 #include <driver/uart.h>
 
 using namespace gpad_hal;
+volatile bool encoderReleased = false;
 
 
 namespace
@@ -360,8 +361,8 @@ void encoderSwitchCallback(byte buttonEvent)
     registerRotaryEncoderPress();
     break;
   case onRelease:
-    // Do nothing...
-    local_ptr_to_serial->println(F("ENCODER_SWITCH onRelease"));
+    // ISR/callback-safe path: defer all work to loop().
+    encoderReleased = true;
     break;
   case onHold:
     // Do nothing...

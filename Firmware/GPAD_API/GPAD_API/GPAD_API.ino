@@ -1607,9 +1607,10 @@ void setup()
   // Serial setup
   delay(100);
   debugSerial.begin(BAUDRATE);
-  while (!debugSerial)
+  const unsigned long serialWaitStartMs = millis();
+  while (!debugSerial && (millis() - serialWaitStartMs) < 1000)
   {
-    ; // wait for serial port to connect. Needed for native USB
+    delay(1); // wait briefly for serial port; avoid blocking forever
   }
   serialSplash();
   // We call this a second time to get the MAC on the screen
@@ -1853,6 +1854,16 @@ void loop()
     lcd.backlight();
     poll_GPAD_menu();
   }
+
+  if (encoderReleased)
+  {
+    encoderReleased = false;
+    Serial.println("Before handleEncoderSelect");
+    handleEncoderSelect();
+    Serial.println("After handleEncoderSelect");
+  }
+
+  delay(1);
 
   // if ((millis() / 10000) > cnt_actions) {
   //   cnt_actions++;

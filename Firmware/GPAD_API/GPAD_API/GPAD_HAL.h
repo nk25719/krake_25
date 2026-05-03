@@ -142,6 +142,7 @@ bool setComPortBaudRate(uint32_t baudRate);
 bool setComPortSerialFormatIndex(uint8_t serialFormatIndex);
 bool setComPortFlowControl(ComFlowControlMode flowControl);
 void applyComPortConfig(Stream *serialport);
+extern volatile bool encoderReleased;
 
 namespace gpad_hal
 {

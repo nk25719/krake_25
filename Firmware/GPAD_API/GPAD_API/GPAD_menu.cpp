@@ -250,6 +250,11 @@ void registerRotaryEncoderPress()
   reIn.registerEvent(RotaryEventIn::EventType::BUTTON_CLICKED);
 }
 
+void handleEncoderSelect()
+{
+  registerRotaryEncoderPress();
+}
+
 void setup_GPAD_menu()
 {
   const ComPortConfig &cfg = getComPortConfig();
