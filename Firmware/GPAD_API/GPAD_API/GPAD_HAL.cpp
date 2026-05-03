@@ -163,6 +163,7 @@ unsigned int multiHitTime = 400;
 DailyStruggleButton muteButton;
 DailyStruggleButton encoderSwitchButton;
 volatile bool encoderReleased = false;
+extern Stream *local_ptr_to_serial;
 
 static void handleEncoderSelect()
 {
