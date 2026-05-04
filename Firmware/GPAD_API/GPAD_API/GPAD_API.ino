@@ -341,7 +341,9 @@ void publishOnLineMsg(void)
     dtostrf(rssi, 1, 2, rssiString);
     char onLineMsg[32] = " online, RSSI:";
     strcat(onLineMsg, rssiString);
-    client.publish(publish_Ack_Topic, onLineMsg, true);
+    char onLineJson[64];
+    snprintf(onLineJson, sizeof(onLineJson), "{\"status\":\"online\",\"rssi\":\"%s\"}", rssiString);
+    client.publish(publish_Ack_Topic, onLineJson, true);
 
     // This should be moved to a place after the WiFi connect success
     //  debugSerial.print("Device connected at IPaddress: "); //FLE
@@ -370,7 +372,7 @@ void reconnect()
     {
       debugSerial.print("success at: ");
       debugSerial.println(millis());
-      String onlinePayload = String(device_role) + " online";
+      String onlinePayload = String("{\"status\":\"online\",\"role\":\"") + device_role + "\"}";
       client.publish(publish_Ack_Topic, onlinePayload.c_str(), true);
       client.subscribe(subscribe_Alarm_Topic); // Subscribe to GPAD API alarms
       client.subscribe(STATUS_DISCOVERY_TOPIC);
@@ -1607,9 +1609,12 @@ void setup()
   // Serial setup
   delay(100);
   debugSerial.begin(BAUDRATE);
-  while (!debugSerial)
+
+  const unsigned long serialWaitStartMs = millis();
+  const unsigned long SERIAL_CONNECT_TIMEOUT_MS = 2000;
+  while (!debugSerial && (millis() - serialWaitStartMs) < SERIAL_CONNECT_TIMEOUT_MS)
   {
-    ; // wait for serial port to connect. Needed for native USB
+    delay(10); // avoid starving RTOS/WDT while waiting for native USB serial
   }
   serialSplash();
   // We call this a second time to get the MAC on the screen

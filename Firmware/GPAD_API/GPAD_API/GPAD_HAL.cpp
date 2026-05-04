@@ -605,70 +605,31 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
   }
   case 'i':
   {
-    // Firmware Version
-    //  81+23 = Maximum string length
-    //         char onInfoMsg[32] = "Firmware Version: ";
-    //         static char onInfoMsg[81+24] = "Firmware Version: "; //This does not have the bug.
-    char onInfoMsg[81 + 24] = "Firmware Version: "; // This
-    char str[20];
+    char onInfoMsg[192];
 
-    strcat(onInfoMsg, FIRMWARE_VERSION);
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-    onInfoMsg[0] = '\0';
-
-    // Report API version
-    strcat(onInfoMsg, "GPAD API Version: ");
-    strcat(onInfoMsg, gpadApi.getVersion().toString().c_str());
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-    onInfoMsg[0] = '\0';
-
-    // Up time
-    onInfoMsg[0] = '\0';
-
-    str[0] = '\0';
-    strcat(onInfoMsg, "System up time (mills): ");
-    sprintf(str, "%d", millis());
-    strcat(onInfoMsg, str);
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"firmware_version\":\"%s\"}", FIRMWARE_VERSION);
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
-    // Mute status
-    onInfoMsg[0] = '\0';
-    // onInfoMsg[32] = "Mute Status: ";
-    strcat(onInfoMsg, "Mute Status: ");
-    if (currentlyMuted)
-    {
-      strcat(onInfoMsg, "MUTED");
-    }
-    else
-    {
-      strcat(onInfoMsg, "NOT MUTED");
-    }
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"gpad_api_version\":\"%s\"}", gpadApi.getVersion().toString().c_str());
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
-    // Alarm level
-    onInfoMsg[0] = '\0';
-    str[0] = '\0';
-    strcat(onInfoMsg, "Current alarm Level: ");
-    sprintf(str, "%d", getCurrentAlarmLevel());
-    strcat(onInfoMsg, str);
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"system_uptime_ms\":%lu}", millis());
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
-    // Alarm message
-    onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "Current alarm message: ");
-    //        strcat(onInfoMsg, *getCurrentMessage());  Produced error error: invalid conversion from 'char' to 'const char*' [-fpermissive]
-    strcat(onInfoMsg, getCurrentMessage());
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"mute_status\":\"%s\"}", currentlyMuted ? "MUTED" : "NOT_MUTED");
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
-    // IP Address
-    onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "IP Address: ");
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"alarm_level\":%d}", getCurrentAlarmLevel());
+    if (client != nullptr) publishAck(client, onInfoMsg);
+    serialport->println(onInfoMsg);
+
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"alarm_message\":\"%s\"}", getCurrentMessage());
+    if (client != nullptr) publishAck(client, onInfoMsg);
+    serialport->println(onInfoMsg);
 
     IPAddress stationIp = WiFi.localIP();
     IPAddress accessPointIp = WiFi.softAPIP();
@@ -683,21 +644,14 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
     char ipString[16];
     snprintf(ipString, sizeof(ipString), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 
-    strcat(onInfoMsg, ipString);
-
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"ip_address\":\"%s\"}", ipString);
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
-    // Reset reason
-    onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "Reset reason: ");
     const esp_reset_reason_t resetReason = esp_reset_reason();
-    strcat(onInfoMsg, resetReasonToString(resetReason));
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"reset_reason\":\"%s\"}", resetReasonToString(resetReason));
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
-
-    // serialport->print("myIP =");
-    // serialport->println(myIP);   // Caused Error Multiple libraries were found for "WiFiManager.h"
 
     break; // end of 'i'
   }
