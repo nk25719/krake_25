@@ -339,8 +339,6 @@ void publishOnLineMsg(void)
 #endif
 
     dtostrf(rssi, 1, 2, rssiString);
-    char onLineMsg[32] = " online, RSSI:";
-    strcat(onLineMsg, rssiString);
     char onLineJson[64];
     snprintf(onLineJson, sizeof(onLineJson), "{\"status\":\"online\",\"rssi\":\"%s\"}", rssiString);
     client.publish(publish_Ack_Topic, onLineJson, true);
@@ -361,7 +359,7 @@ void reconnect()
 {
   int n = 0;
   const String clientId = String(COMPANY_NAME) + "-" + String(macAddressString);
-  const String willPayload = String(device_role) + " offline";
+  const String willPayload = String("{\"status\":\"offline\",\"role\":\"") + device_role + "\"}";
   while (!client.connected() && n < NUM_WIFI_RECONNECT_RETRIES)
   {
     n++;
