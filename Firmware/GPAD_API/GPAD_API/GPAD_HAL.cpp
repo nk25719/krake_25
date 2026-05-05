@@ -148,6 +148,45 @@ void applyComPortConfig(Stream *serialport)
 
 const char *resetReasonToString(esp_reset_reason_t reason);
 
+static void escapeJsonString(const char *src, char *dest, size_t destSize)
+{
+  if (destSize == 0)
+  {
+    return;
+  }
+
+  size_t j = 0;
+  for (size_t i = 0; src[i] != '\0' && j + 1 < destSize; ++i)
+  {
+    const char c = src[i];
+    if ((c == '\\' || c == '"') && j + 2 < destSize)
+    {
+      dest[j++] = '\\';
+      dest[j++] = c;
+    }
+    else if (c == '\n' && j + 2 < destSize)
+    {
+      dest[j++] = '\\';
+      dest[j++] = 'n';
+    }
+    else if (c == '\r' && j + 2 < destSize)
+    {
+      dest[j++] = '\\';
+      dest[j++] = 'r';
+    }
+    else if (c == '\t' && j + 2 < destSize)
+    {
+      dest[j++] = '\\';
+      dest[j++] = 't';
+    }
+    else
+    {
+      dest[j++] = c;
+    }
+  }
+  dest[j] = '\0';
+}
+
 // Use Serial1 for UART communication
 HardwareSerial uartSerial1(1); // For user Serial Port
 HardwareSerial uartSerial2(2); // For DFPLayer, audio
@@ -627,7 +666,9 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
-    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"alarm_message\":\"%s\"}", getCurrentMessage());
+    char escapedAlarmMessage[128];
+    escapeJsonString(getCurrentMessage(), escapedAlarmMessage, sizeof(escapedAlarmMessage));
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "{\"alarm_message\":\"%s\"}", escapedAlarmMessage);
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 

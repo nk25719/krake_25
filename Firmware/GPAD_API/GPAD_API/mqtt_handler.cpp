@@ -7,7 +7,29 @@ extern char publish_Ack_Topic[];
 static bool isJsonObjectMessage(const char *message)
 {
   const size_t len = strlen(message);
-  return len >= 2 && message[0] == '{' && message[len - 1] == '}';
+  if (len < 2)
+  {
+    return false;
+  }
+
+  size_t start = 0;
+  while (start < len && (message[start] == ' ' || message[start] == '\n' || message[start] == '\r' || message[start] == '\t'))
+  {
+    ++start;
+  }
+
+  if (start >= len || message[start] != '{')
+  {
+    return false;
+  }
+
+  size_t end = len;
+  while (end > start && (message[end - 1] == ' ' || message[end - 1] == '\n' || message[end - 1] == '\r' || message[end - 1] == '\t'))
+  {
+    --end;
+  }
+
+  return end > start && message[end - 1] == '}';
 }
 
 static void appendEscapedJsonString(char *dest, size_t destSize, const char *src)
@@ -35,6 +57,11 @@ static void appendEscapedJsonString(char *dest, size_t destSize, const char *src
     {
       dest[j++] = '\\';
       dest[j++] = 'r';
+    }
+    else if (c == '\t' && j + 2 < destSize)
+    {
+      dest[j++] = '\\';
+      dest[j++] = 't';
     }
     else
     {
