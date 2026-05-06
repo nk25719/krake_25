@@ -11,7 +11,7 @@ const int nDFPlayer_BUSY = 4; // active LOW BUSY pin from DFPlayer
 bool isDFPlayerDetected = false;
 int volumeDFPlayer = 20; // Range: 1 to 30
 int numberFilesDF = 0;   // Number of audio files found on SD card
-
+extern bool currentlyMuted;
 char command;
 int pausa = 0;
 
@@ -304,6 +304,12 @@ void playNotBusyLevel(int level)
 {
   if (!isDFPlayerDetected) return;
 
+  if (currentlyMuted)
+  {
+    Serial.println("Muted: skipping DFPlayer playback.");
+    return;
+  }
+
   Serial.println("playNotBusyLevel");
   if (digitalRead(nDFPlayer_BUSY) == HIGH)
   {
@@ -324,6 +330,12 @@ void playNotBusyLevel(int level)
 bool playAlarmLevel(int alarmNumberToPlay)
 {
   if (!isDFPlayerDetected) return false;
+
+  if (currentlyMuted)
+  {
+    Serial.println("Muted: skipping alarm playback.");
+    return false;
+  }
 
   static unsigned long timer = 0;
   const unsigned long delayPlayLevel = 100;

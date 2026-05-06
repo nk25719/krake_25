@@ -29,7 +29,7 @@
 #include <esp_system.h>
 #include <Preferences.h>
 #include <driver/uart.h>
-
+#include <GPAPMessage.h>
 using namespace gpad_hal;
 
 
@@ -536,6 +536,35 @@ void GPAD_HAL_setup(Stream *serialport, wifi_mode_t wifiMode, IPAddress &deviceI
 // the character buffer and returns an "abstract" command to be acted on
 // elseshere. This will allow us to remove the PubSubClient from the this file,
 // the Hardware Abstraction Layer.
+
+class CharBufferPrint : public Print
+{
+public:
+  CharBufferPrint(char *buffer, size_t capacity)
+      : _buffer(buffer), _capacity(capacity), _pos(0)
+  {
+    if (_capacity > 0) _buffer[0] = '\0';
+  }
+
+  size_t write(uint8_t ch) override
+  {
+    if (ch == '\0') return 1;
+
+    if (_pos + 1 < _capacity)
+    {
+      _buffer[_pos++] = (char)ch;
+      _buffer[_pos] = '\0';
+    }
+
+    return 1;
+  }
+
+private:
+  char *_buffer;
+  size_t _capacity;
+  size_t _pos;
+};
+
 void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *client)
 {
   if (buf == nullptr || serialport == nullptr || rlen < 1)
@@ -575,34 +604,50 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
     printInstructions(serialport);
     break;
   }
-  case 'a':
+case 'a':
+{
+  try
   {
-    if (rlen < 2)
+    auto gpMessage = gpap_message::GPAPMessage::deserialize(buf, (size_t)rlen);
+
+    if (gpMessage.getMessageType() != gpap_message::MessageType::ALARM)
     {
-      printError(serialport);
+      serialport->println(F("GPAP message is not an alarm."));
       return;
     }
 
-    int N = buf[1] - '0';
+    const auto &alarmMessage = gpMessage.getAlarmMessage();
+
+    int N = static_cast<char>(alarmMessage.getAlarmLevel()) - '0';
+
     if (N < 0 || N >= NUM_LEVELS)
     {
+      serialport->println(F("Invalid GPAP alarm severity."));
       printError(serialport);
       return;
     }
 
     char msg[MAX_BUFFER_SIZE];
-    size_t copyLen = min((size_t)rlen, sizeof(msg) - 1);
-    memcpy(msg, buf, copyLen);
-    msg[copyLen] = '\0';
-    // This copy loooks uncessary, but is not...we want "alarm"
-    // to be a completely independent and abstract function.
-    // it should copy the msg buffer
-    serialport->print("The MQTT Alarm Message: ");
-    serialport->println(msg);
-    alarm((AlarmLevel)N, msg, serialport); // Makes Lamps indicate alarm.
+    CharBufferPrint msgWriter(msg, sizeof(msg));
+    alarmMessage.getAlarmContent().printTo(msgWriter);
 
-    break;
+    serialport->print(F("GPAP Alarm Level: "));
+    serialport->println(N);
+
+    serialport->print(F("GPAP Alarm Content: "));
+    serialport->println(msg);
+
+    alarm((AlarmLevel)N, msg, serialport);
   }
+  catch (...)
+  {
+    serialport->println(F("GPAP alarm parse failed."));
+    printError(serialport);
+    return;
+  }
+
+  break;
+}
   case 'i':
   {
     // Firmware Version
