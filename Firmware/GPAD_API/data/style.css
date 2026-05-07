@@ -119,6 +119,19 @@ textarea::placeholder {
   color: var(--muted);
 }
 
+/* EMBEDS */
+.embed-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.embed-wrap iframe {
+  display: block;
+  max-width: 100%;
+  border: 0;
+  border-radius: 10px;
+}
+
 /* TABLE */
 table {
   width: 100%;

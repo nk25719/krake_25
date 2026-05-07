@@ -893,8 +893,8 @@ void filter_control_chars(char *msg)
 // on the display
 void showStatusLCD(AlarmLevel level, bool muted, char *msg)
 {
-  // lcd.init();
-  // lcd.clear();
+  lcd.init();
+  lcd.clear();
   // Possibly we don't need the backlight if the level is zero!
   if (level != 0)
   {
