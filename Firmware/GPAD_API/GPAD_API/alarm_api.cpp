@@ -35,7 +35,8 @@ unsigned long muteTimeoutEndMillis = 0;
 unsigned long muteTimeoutStartMillis = 0;
 unsigned long muteTimeoutDurationMillis = 0;
 const char *AlarmNames[] = {"OK   ", "INFO.", "PROB.", "WARN ", "CRIT.", "PANIC"};
-
+char currentAlarmId[11] = "";
+char currentAlarmType[4] = "";
 // This is the abstract alarm function. It CANNOT
 // assume the msg buffer will exist after this call.
 // str must be null-terminated string!

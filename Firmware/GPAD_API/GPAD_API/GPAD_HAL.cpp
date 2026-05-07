@@ -171,7 +171,9 @@ extern unsigned long muteTimeoutEndMillis;
 
 extern char macAddressString[13];
 extern int muteTimeoutMinutes;
-
+extern char currentAlarmId[11];
+extern char currentAlarmType[4];
+ 
 // For LCD
 //  #include <LiquidCrystal_I2C.h>
 
@@ -412,6 +414,7 @@ void muteButtonCallback(byte buttonEvent)
       local_ptr_to_serial->print(F("Muted for "));
       local_ptr_to_serial->print(muteTimeoutMinutes);
       local_ptr_to_serial->println(F(" minute(s)."));
+      
     }
     start_of_song = millis();
     annunciateAlarmLevel(local_ptr_to_serial);
@@ -618,6 +621,23 @@ case 'a':
 
     const auto &alarmMessage = gpMessage.getAlarmMessage();
 
+    strncpy(currentAlarmId, "", sizeof(currentAlarmId));
+    strncpy(currentAlarmType, "", sizeof(currentAlarmType));
+
+    CharBufferPrint idWriter(currentAlarmId, sizeof(currentAlarmId));
+    CharBufferPrint typeWriter(currentAlarmType, sizeof(currentAlarmType));
+
+    const auto &messageId = alarmMessage.getMessageId();
+    if (messageId.state == gpap_message::alarm::AlarmMessage::PossibleMessageId::State::Some)
+    {
+      messageId.contents.printTo(idWriter);
+    }
+
+    const auto &typeDesignator = alarmMessage.getTypeDesignator();
+    if (typeDesignator.state == gpap_message::alarm::AlarmMessage::PossibleTypeDesignator::State::Some)
+    {
+      typeDesignator.contents.printTo(typeWriter);
+    }
     int N = static_cast<char>(alarmMessage.getAlarmLevel()) - '0';
 
     if (N < 0 || N >= NUM_LEVELS)
@@ -873,8 +893,8 @@ void filter_control_chars(char *msg)
 // on the display
 void showStatusLCD(AlarmLevel level, bool muted, char *msg)
 {
-  lcd.init();
-  lcd.clear();
+  // lcd.init();
+  // lcd.clear();
   // Possibly we don't need the backlight if the level is zero!
   if (level != 0)
   {
@@ -1002,10 +1022,18 @@ void annunciateAlarmLevel(Stream *serialport)
   unchanged_anunicateAlarmLevel(serialport);
   showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
   // here is the new call
-  serialport->println("dfPlayer.play");
-  serialport->println(currentLevel);
-  if (!currentlyMuted)
+    if (currentLevel <= 0)
   {
+    serialport->println(F("Silent level: skipping DFPlayer playback."));
+  }
+  else if (currentlyMuted)
+  {
+    serialport->println(F("Muted: skipping DFPlayer playback."));
+  }
+  else
+  {
+    serialport->println(F("dfPlayer.play"));
+    serialport->println(currentLevel);
     playNotBusyLevel(currentLevel);
   }
 

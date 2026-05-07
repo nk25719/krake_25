@@ -310,6 +310,12 @@ void playNotBusyLevel(int level)
     return;
   }
 
+     if (level <= 0)
+  {
+    Serial.println("Silent level: skipping DFPlayer playback.");
+    return;
+  }
+
   Serial.println("playNotBusyLevel");
   if (digitalRead(nDFPlayer_BUSY) == HIGH)
   {
@@ -325,6 +331,9 @@ void playNotBusyLevel(int level)
   {
     printDetail(dfPlayer.readType(), dfPlayer.read());
   }
+
+  if (!isDFPlayerDetected) return;
+
 }
 
 bool playAlarmLevel(int alarmNumberToPlay)

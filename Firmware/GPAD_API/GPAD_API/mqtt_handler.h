@@ -4,5 +4,5 @@
 #include <PubSubClient.h>
 
 bool publishAck(PubSubClient *client, const char *message);
-
+bool publishGPAPResponse(PubSubClient *client, const char *responseType, const char *alarmId);
 #endif

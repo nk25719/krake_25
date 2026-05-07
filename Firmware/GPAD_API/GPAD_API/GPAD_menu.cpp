@@ -13,7 +13,7 @@ using namespace Menu;
 
 
 extern PubSubClient client;
-
+extern char currentAlarmId[11];
 extern bool running_menu;
 extern bool menu_just_exited;
 extern unsigned long muteTimeoutEndMillis;
@@ -27,8 +27,11 @@ result action1(eventMask e)
   {
     Serial.println(F("Yes, I will take that action #1 !"));
   }
-  char onLineMsg[32] = "Acknowledging!";
-  publishAck(&client, onLineMsg);
+  //char onLineMsg[32] = "Acknowledging!";
+  // publishAck(&client, onLineMsg);
+  publishGPAPResponse(&client, "a", currentAlarmId);
+  Serial.print("GPAP response sent for ID: ");
+  Serial.println(currentAlarmId);
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Acknowledged!");
@@ -45,8 +48,11 @@ result action2(eventMask e)
   char emptyMsg[] = "";
   alarm(silent, emptyMsg, &Serial);      // sets currentLevel=0, clears AlarmMessageBuffer
   annunciateAlarmLevel(&Serial);          // turns off LEDs, updates LCD, stops DFPlayer buzzer
-  char onLineMsg[32] = "Dismissed!";
-  publishAck(&client, onLineMsg);
+  //char onLineMsg[32] = "Dismissed!";
+  // publishAck(&client, onLineMsg);
+  publishGPAPResponse(&client, "d", currentAlarmId);
+  Serial.print("GPAP response sent for ID: ");
+  Serial.println(currentAlarmId);
   return proceed;
 }
 result action3(eventMask e)
@@ -58,8 +64,11 @@ result action3(eventMask e)
   char emptyMsg[] = "";
   alarm(silent, emptyMsg, &Serial);
   annunciateAlarmLevel(&Serial);
-  char onLineMsg[32] = "Shelved!";
-  publishAck(&client, onLineMsg);
+  //char onLineMsg[32] = "Shelved!";
+  // publishAck(&client, onLineMsg);
+  publishGPAPResponse(&client, "s", currentAlarmId);
+  Serial.print("GPAP response sent for ID: ");
+  Serial.println(currentAlarmId);
   return proceed;
 }
 result action4(eventMask e)
