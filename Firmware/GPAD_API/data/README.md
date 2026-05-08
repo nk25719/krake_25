@@ -1,23 +1,13 @@
-# KRAKE cleaned web bundle
+# GPAD API web assets
 
-Drop these files into your web/static filesystem. Keep the backend endpoints the same:
+The firmware now keeps the browser surface static and GPAP-focused. Runtime state and commands are carried by GPAP over serial/MQTT instead of browser runtime endpoints.
 
-- `/status`
-- `/lcd`
-- `/serial-monitor`
-- `/wifi`
-- `/settings-data`
-- `/settings/mute`
-- `/settings/wifi/reset`
-- `/config`
-- `/broker-console/data`
-- `/broker-console/publish`
+Active firmware routes:
 
-Main cleanup:
-
-- Shared navigation in `js/common.js`
-- Shared API helpers in `js/common.js`
-- PMD topics are loaded from `/settings-data`
-- Settings remains the source of truth for MQTT topics
-- Device monitor stays responsible for online/offline detection
-- CSS consolidated into `style.css`
+- `/` / `/index.html`
+- `/monitor`
+- `/serial-monitor` (plain text serial mirror)
+- `/manual`
+- `/PMD_GPAD_API` / `/PMD_GPAD_API.html`
+- `/settings/wifi/reset` (plain text POST)
+- `/update` (ElegantOTA)

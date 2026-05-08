@@ -16,7 +16,6 @@
       defaultOpen: false,
       minRole: 'admin',
       items: [
-        ['Settings', '/settings'],
         ['Firmware Update', '/update']
       ]
     },
@@ -26,10 +25,7 @@
       defaultOpen: false,
       minRole: 'developer',
       items: [
-        ['PMD Web UI', '/PMD_GPAD_API'],
-        ['Factory Test / Developer Monitor', '/monitor'],
-        ['MQTT Device Monitor', '/device-monitor'],
-        ['Electrical Test History', '/Electrical_testHistory.html']
+        ['Factory Test / Developer Monitor', '/monitor']
       ]
     }
   ];
@@ -40,9 +36,6 @@
 
   function byId(id) { return document.getElementById(id); }
   function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch])); }
-  function splitCsv(value) { return String(value || '').split(',').map((item) => item.trim()).filter(Boolean); }
-  function unique(values) { return Array.from(new Set(values.filter(Boolean))); }
-  function getPublishTopics(settings) { return unique([settings.publishDefaultTopic, settings.publishTopic, ...splitCsv(settings.publishTopics)]); }
   function hasRole(required) { return roleRank[state.currentRole] >= roleRank[required]; }
   function persistState() { localStorage.setItem('krake_role', state.currentRole); localStorage.setItem('krake_dev_unlocked', state.developerUnlocked ? '1' : '0'); }
   function restoreState() {
@@ -58,11 +51,6 @@
     const text = await response.text();
     if (!response.ok) throw new Error(text || ('HTTP ' + response.status));
     return text;
-  }
-  async function getJson(url) {
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) throw new Error(await response.text() || ('HTTP ' + response.status));
-    return response.json();
   }
   function showMessage(message, isError = false, id = 'message') {
     const node = byId(id);
@@ -118,5 +106,5 @@
   }
   function setText(id, value, fallback = '-') { const node = byId(id); if (node) node.textContent = value || fallback; }
 
-  window.KrakeUI = { byId, escapeHtml, splitCsv, unique, getPublishTopics, postForm, getJson, showMessage, toggleMenu, mountLayout, setText };
+  window.KrakeUI = { byId, escapeHtml, postForm, showMessage, toggleMenu, mountLayout, setText };
 })();

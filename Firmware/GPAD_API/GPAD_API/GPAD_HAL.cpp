@@ -147,6 +147,7 @@ void applyComPortConfig(Stream *serialport)
 }
 
 const char *resetReasonToString(esp_reset_reason_t reason);
+const char *resetReasonHint(esp_reset_reason_t reason);
 
 // Use Serial1 for UART communication
 HardwareSerial uartSerial1(1); // For user Serial Port
@@ -675,16 +676,15 @@ case 'a':
     //         char onInfoMsg[32] = "Firmware Version: ";
     //         static char onInfoMsg[81+24] = "Firmware Version: "; //This does not have the bug.
     char onInfoMsg[81 + 24] = "Firmware Version: "; // This
-    char str[20];
-
     strcat(onInfoMsg, FIRMWARE_VERSION);
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
     onInfoMsg[0] = '\0';
 
-    // Report API version
-    strcat(onInfoMsg, "GPAD API Version: ");
-    strcat(onInfoMsg, gpadApi.getVersion().toString().c_str());
+    // Report API version without heap allocation.
+    char apiVersion[12];
+    gpadApi.getVersion().toCString(apiVersion, sizeof(apiVersion));
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "GPAD API Version: %s", apiVersion);
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
     onInfoMsg[0] = '\0';
@@ -692,49 +692,31 @@ case 'a':
     // Up time
     onInfoMsg[0] = '\0';
 
-    str[0] = '\0';
-    strcat(onInfoMsg, "System up time (mills): ");
-    sprintf(str, "%d", millis());
-    strcat(onInfoMsg, str);
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "System up time (mills): %lu", millis());
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
     // Mute status
     onInfoMsg[0] = '\0';
     // onInfoMsg[32] = "Mute Status: ";
-    strcat(onInfoMsg, "Mute Status: ");
-    if (currentlyMuted)
-    {
-      strcat(onInfoMsg, "MUTED");
-    }
-    else
-    {
-      strcat(onInfoMsg, "NOT MUTED");
-    }
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "Mute Status: %s", currentlyMuted ? "MUTED" : "NOT MUTED");
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
     // Alarm level
     onInfoMsg[0] = '\0';
-    str[0] = '\0';
-    strcat(onInfoMsg, "Current alarm Level: ");
-    sprintf(str, "%d", getCurrentAlarmLevel());
-    strcat(onInfoMsg, str);
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "Current alarm Level: %d", getCurrentAlarmLevel());
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
     // Alarm message
     onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "Current alarm message: ");
-    //        strcat(onInfoMsg, *getCurrentMessage());  Produced error error: invalid conversion from 'char' to 'const char*' [-fpermissive]
-    strcat(onInfoMsg, getCurrentMessage());
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "Current alarm message: %.80s", getCurrentMessage());
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
     // IP Address
     onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "IP Address: ");
-
     IPAddress stationIp = WiFi.localIP();
     IPAddress accessPointIp = WiFi.softAPIP();
     IPAddress ip = stationIp;
@@ -748,16 +730,19 @@ case 'a':
     char ipString[16];
     snprintf(ipString, sizeof(ipString), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 
-    strcat(onInfoMsg, ipString);
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "IP Address: %s", ipString);
 
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
     // Reset reason
     onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "Reset reason: ");
     const esp_reset_reason_t resetReason = esp_reset_reason();
-    strcat(onInfoMsg, resetReasonToString(resetReason));
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "Reset reason: %s", resetReasonToString(resetReason));
+    if (client != nullptr) publishAck(client, onInfoMsg);
+    serialport->println(onInfoMsg);
+
+    snprintf(onInfoMsg, sizeof(onInfoMsg), "Reset hint: %.90s", resetReasonHint(resetReason));
     if (client != nullptr) publishAck(client, onInfoMsg);
     serialport->println(onInfoMsg);
 
@@ -1057,15 +1042,13 @@ SemanticVersion::SemanticVersion(uint8_t major, uint8_t minor, uint8_t patch)
 {
 }
 
-std::string SemanticVersion::toString() const
+void SemanticVersion::toCString(char *buffer, size_t bufferLen) const
 {
-  std::string versionString = std::to_string(this->major);
-  versionString.push_back('.');
-  versionString.append(std::to_string(this->minor));
-  versionString.push_back('.');
-  versionString.append(std::to_string(this->patch));
-
-  return versionString;
+  if (buffer == nullptr || bufferLen == 0)
+  {
+    return;
+  }
+  snprintf(buffer, bufferLen, "%u.%u.%u", this->major, this->minor, this->patch);
 }
 const char *resetReasonToString(esp_reset_reason_t reason)
 {
@@ -1083,5 +1066,24 @@ const char *resetReasonToString(esp_reset_reason_t reason)
   case ESP_RST_BROWNOUT: return "BROWNOUT";
   case ESP_RST_SDIO: return "SDIO";
   default: return "UNMAPPED";
+  }
+}
+
+const char *resetReasonHint(esp_reset_reason_t reason)
+{
+  switch (reason)
+  {
+  case ESP_RST_PANIC:
+    return "panic: check null pointers, bounds, unsafe casts, and heap fragmentation";
+  case ESP_RST_INT_WDT:
+  case ESP_RST_TASK_WDT:
+  case ESP_RST_WDT:
+    return "watchdog: remove blocking loops/delays and yield during slow device I/O";
+  case ESP_RST_SW:
+    return "software reset: ESP.restart or WiFi credential reset path requested reboot";
+  case ESP_RST_BROWNOUT:
+    return "brownout: reduce startup current or improve power supply/headroom";
+  default:
+    return "normal/other reset: inspect serial logs if resets repeat";
   }
 }

@@ -1,10 +1,6 @@
 
 (function () {
   KrakeUI.mountLayout('Factory Test / Developer Monitor');
-  async function fetchStatus() {
-    try { const data = await KrakeUI.getJson('/status'); KrakeUI.setText('serialPort', data.serialPort); KrakeUI.setText('serialBaud', data.serialBaud); }
-    catch (_) { KrakeUI.setText('uartText', 'UART status fetch failed'); }
-  }
   async function fetchSerialMonitor() {
     try {
       const res = await fetch('/serial-monitor', { cache: 'no-store' });
@@ -16,5 +12,5 @@
       if (nearBottom) uartText.scrollTop = uartText.scrollHeight;
     } catch (_) { KrakeUI.setText('uartText', 'Serial monitor fetch failed'); }
   }
-  fetchStatus(); fetchSerialMonitor(); setInterval(fetchStatus, 1000); setInterval(fetchSerialMonitor, 300);
+  fetchSerialMonitor(); setInterval(fetchSerialMonitor, 300);
 })();

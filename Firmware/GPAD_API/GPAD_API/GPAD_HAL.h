@@ -25,6 +25,7 @@
 #include <PubSubClient.h>
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
+#include <cstddef>
 
 // On Nov. 5th, 2024, we image 3 different hardware platforms.
 // The GPAD exists, and is working: https://www.hardware-x.com/article/S2468-0672(24)00084-1/fulltext
@@ -166,7 +167,7 @@ namespace gpad_hal
   public:
     SemanticVersion(uint8_t major, uint8_t minor, uint8_t patch);
 
-    std::string toString() const;
+    void toCString(char *buffer, size_t bufferLen) const;
 
   private:
     uint8_t major;
@@ -269,14 +270,6 @@ public :
   }
   void noCursor(){
     _LCD->noCursor();
-  }
-  String line(uint8_t row) const
-  {
-    if (row >= LCD_ROWS)
-    {
-      return String("");
-    }
-    return String(_lcdMirror[row]);
   }
 private:
   void resetMirror()
