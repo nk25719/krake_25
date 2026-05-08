@@ -607,15 +607,14 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
     printInstructions(serialport);
     break;
   }
-case 'a':
-{
-  try
+  case 'a':
   {
     auto gpMessage = gpap_message::GPAPMessage::deserialize(buf, (size_t)rlen);
 
     if (gpMessage.getMessageType() != gpap_message::MessageType::ALARM)
     {
-      serialport->println(F("GPAP message is not an alarm."));
+      serialport->println(F("GPAP alarm parse failed."));
+      printError(serialport);
       return;
     }
 
@@ -658,16 +657,8 @@ case 'a':
     serialport->println(msg);
 
     alarm((AlarmLevel)N, msg, serialport);
+    break;
   }
-  catch (...)
-  {
-    serialport->println(F("GPAP alarm parse failed."));
-    printError(serialport);
-    return;
-  }
-
-  break;
-}
   case 'i':
   {
     // Firmware Version

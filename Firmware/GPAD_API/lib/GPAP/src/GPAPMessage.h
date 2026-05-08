@@ -34,6 +34,7 @@ namespace gpap_message
         HELP = 'h',
         ALARM = 'a',
         INFO = 'i',
+        INVALID = '\0',
     };
     struct GPAPMessage final
     {
@@ -65,6 +66,7 @@ namespace gpap_message
             : messageType(MessageType::UNMUTE), unmute(std::move(unmuteCommand)) {}
         explicit GPAPMessage(const HelpMessage helpCommand) noexcept
             : messageType(MessageType::HELP), help(std::move(helpCommand)) {}
+        static GPAPMessage invalid() noexcept { return GPAPMessage(InfoMessage(), MessageType::INVALID); }
         GPAPMessage(const GPAPMessage &&other) noexcept
             : messageType(other.messageType)
         {
@@ -74,6 +76,7 @@ namespace gpap_message
                 this->alarm = std::move(other.alarm);
                 break;
             case MessageType::INFO:
+            case MessageType::INVALID:
                 this->info = std::move(other.info);
                 break;
             case MessageType::MUTE:
@@ -98,6 +101,7 @@ namespace gpap_message
                     this->alarm = std::move(other.alarm);
                     break;
                 case MessageType::INFO:
+                case MessageType::INVALID:
                     this->info = std::move(other.info);
                     break;
                 case MessageType::MUTE:
@@ -115,6 +119,9 @@ namespace gpap_message
         }
 
         ~GPAPMessage() {}
+
+        explicit GPAPMessage(const InfoMessage infoMessage, const MessageType forcedMessageType) noexcept
+            : messageType(forcedMessageType), info(std::move(infoMessage)) {}
 
         GPAPMessage() = delete;
         GPAPMessage(GPAPMessage &other) = delete;
