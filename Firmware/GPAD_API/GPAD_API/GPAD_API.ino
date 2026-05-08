@@ -217,10 +217,15 @@ char publish_Default_Topic[MAX_TOPIC_LEN] = {0};
 const size_t DEVICE_ROLE_MAX_LEN = 12;
 char device_role[DEVICE_ROLE_MAX_LEN] = "Krake";
 const char *STATUS_DISCOVERY_TOPIC = "#";
+const bool MQTT_DISCOVERY_SUBSCRIBE_ALL = false;
 const uint8_t MAX_WATCH_TOPICS = 12;
 char watchedTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
 uint8_t watchedTopicCount = 0;
 unsigned long wifiResetRequestedAtMs = 0;
+const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
+const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 2;
+unsigned long lastMqttReconnectAttemptMs = 0;
+bool mqttReconnectRequested = false;
 
 const uint8_t MAX_TRACKED_KRAKES = 16;
 const unsigned long KRAKE_ONLINE_TIMEOUT_MS = 30000;
@@ -323,6 +328,11 @@ void serialSplash()
 // A periodic message identifying the subscriber (Krake) is on line.
 void publishOnLineMsg(void)
 {
+  if (!client.connected())
+  {
+    return;
+  }
+
   const unsigned long MESSAGE_PERIOD = 10000;
   static unsigned long lastMillis = 0; // Sets timing for periodic MQTT publish message
   // publish a message roughly every second.
@@ -353,44 +363,68 @@ void publishOnLineMsg(void)
   }
 }
 
-// TODO: have this return a success or failure status and move
-// the delay up.
-void reconnect()
+void requestMqttReconnect()
 {
-  int n = 0;
+  mqttReconnectRequested = true;
+  lastMqttReconnectAttemptMs = 0;
+  if (client.connected())
+  {
+    client.disconnect();
+  }
+}
+
+bool reconnect(bool force = false)
+{
+  if (client.connected())
+  {
+    mqttReconnectRequested = false;
+    return true;
+  }
+
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    return false;
+  }
+
+  const unsigned long now = millis();
+  if (!force && lastMqttReconnectAttemptMs != 0 && (now - lastMqttReconnectAttemptMs) < MQTT_RECONNECT_INTERVAL_MS)
+  {
+    return false;
+  }
+  lastMqttReconnectAttemptMs = now;
+  mqttReconnectRequested = false;
+
   const String clientId = String(COMPANY_NAME) + "-" + String(macAddressString);
   const String willPayload = String(device_role) + " offline";
-  while (!client.connected() && n < NUM_WIFI_RECONNECT_RETRIES)
+  debugSerial.print("Attempting MQTT connection at: ");
+  debugSerial.print(millis());
+  debugSerial.print("..... ");
+  if (client.connect(clientId.c_str(), mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload.c_str()))
   {
-    n++;
-    debugSerial.print("Attempting MQTT connection at: ");
-    debugSerial.print(millis());
-    debugSerial.print("..... ");
-    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload.c_str()))
+    debugSerial.print("success at: ");
+    debugSerial.println(millis());
+    String onlinePayload = String(device_role) + " online";
+    client.publish(publish_Ack_Topic, onlinePayload.c_str(), true);
+    client.subscribe(subscribe_Alarm_Topic); // Subscribe to GPAD API alarms
+    if (MQTT_DISCOVERY_SUBSCRIBE_ALL)
     {
-      debugSerial.print("success at: ");
-      debugSerial.println(millis());
-      String onlinePayload = String(device_role) + " online";
-      client.publish(publish_Ack_Topic, onlinePayload.c_str(), true);
-      client.subscribe(subscribe_Alarm_Topic); // Subscribe to GPAD API alarms
       client.subscribe(STATUS_DISCOVERY_TOPIC);
-      for (uint8_t i = 0; i < subscribe_Extra_Topic_Count; i++)
-      {
-        client.subscribe(subscribe_Extra_Topics[i]);
-      }
-      for (uint8_t i = 0; i < watchedTopicCount; i++)
-      {
-        client.subscribe(watchedTopics[i]);
-      }
     }
-    else
+    for (uint8_t i = 0; i < subscribe_Extra_Topic_Count; i++)
     {
-      debugSerial.print("failed, rc=");
-      debugSerial.println(client.state());
-      delay(1000);
+      client.subscribe(subscribe_Extra_Topics[i]);
     }
+    for (uint8_t i = 0; i < watchedTopicCount; i++)
+    {
+      client.subscribe(watchedTopics[i]);
+    }
+    return true;
   }
-  debugSerial.println((client.connected()) ? "connected!" : "failed to reconnect!");
+
+  debugSerial.print("failed, rc=");
+  debugSerial.println(client.state());
+  yield();
+  return false;
 }
 
 bool isManagedSubscribedTopic(const char *topic)
@@ -682,7 +716,7 @@ void clearExtraTopics()
   }
 }
 
-void parseAndSetExtraTopics(const String &rawTopics)
+bool parseAndSetExtraTopics(const String &rawTopics)
 {
   clearExtraTopics();
   String token = "";
@@ -694,14 +728,23 @@ void parseAndSetExtraTopics(const String &rawTopics)
       token.trim();
       if (token.length() > 0 && subscribe_Extra_Topic_Count < MAX_EXTRA_TOPICS)
       {
+        if (token.length() >= MAX_TOPIC_LEN)
+        {
+          return false;
+        }
         token.toCharArray(subscribe_Extra_Topics[subscribe_Extra_Topic_Count], MAX_TOPIC_LEN);
         subscribe_Extra_Topic_Count++;
+      }
+      else if (token.length() > 0)
+      {
+        return false;
       }
       token = "";
       continue;
     }
     token += c;
   }
+  return true;
 }
 
 String joinedExtraTopics()
@@ -1001,11 +1044,8 @@ bool applyBrokerSetting(const String &broker)
 
   broker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
   client.setServer(mqtt_broker_name, 1883);
-  if (client.connected())
-  {
-    client.disconnect();
-  }
-  reconnect();
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+  requestMqttReconnect();
   writeMqttConfig();
   return true;
 }
@@ -1037,13 +1077,11 @@ bool applyPrimaryTopicSetting(const String &rawTopic, char *destTopic, size_t de
 
 void applyExtraTopicsSetting(const String &topics)
 {
-  parseAndSetExtraTopics(topics);
-  if (client.connected())
+  if (parseAndSetExtraTopics(topics))
   {
-    client.disconnect();
+    requestMqttReconnect();
+    writeMqttConfig();
   }
-  reconnect();
-  writeMqttConfig();
 }
 // Function to turn on all lamps
 void turnOnAllLamps()
@@ -1367,6 +1405,7 @@ void setupOTA()
                 {
                   broker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
                   client.setServer(mqtt_broker_name, 1883);
+                  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
                 }
               }
 
@@ -1397,7 +1436,7 @@ void setupOTA()
               if (request->hasParam("subscribeTopics", true))
               {
                 String topics = request->getParam("subscribeTopics", true)->value();
-                parseAndSetExtraTopics(topics);
+                if (!parseAndSetExtraTopics(topics))
                 {
                   errorMessage += "invalid subscribeTopics;";
                 }
@@ -1439,11 +1478,7 @@ void setupOTA()
               }
 
               writeMqttConfig();
-              if (client.connected())
-              {
-                client.disconnect();
-              }
-              reconnect();
+              requestMqttReconnect();
               request->send(200, "text/plain", "config updated"); });
 
   server.on("/settings/mute", HTTP_POST, [](AsyncWebServerRequest *request)
@@ -1610,9 +1645,10 @@ void setup()
   // Serial setup
   delay(100);
   debugSerial.begin(BAUDRATE);
-  while (!debugSerial)
+  const unsigned long serialStartMs = millis();
+  while (!debugSerial && (millis() - serialStartMs) < 2000)
   {
-    ; // wait for serial port to connect. Needed for native USB
+    delay(10); // wait briefly for native USB without starving the scheduler
   }
   serialSplash();
   // We call this a second time to get the MAC on the screen
@@ -1664,6 +1700,7 @@ void setup()
   clearTrackedKrakes();
   clearWatchedTopics();
   client.setServer(mqtt_broker_name, 1883); // Default MQTT port, this is a TCP port.
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
   client.setCallback(callback);
 
 #if (DEBUG > 0)
@@ -1707,6 +1744,7 @@ void setup()
 
   loadMqttConfig();
   client.setServer(mqtt_broker_name, 1883);
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
 
 #if (DEBUG > 1)
   debugSerial.println("XXXXXXX");
@@ -1729,7 +1767,7 @@ void setup()
   {
     if (!client.connected())
     {
-      reconnect();
+      reconnect(true);
     }
 
     clearLCD();
@@ -1801,11 +1839,18 @@ void loop()
 {
 #if defined HMWK || defined KRAKE
 
-  if (!client.loop())
+  if (client.connected())
   {
-    debugSerial.print(mqtt_broker_name);
-    debugSerial.print(" lost MQTT at: ");
-    debugSerial.println(millis());
+    if (!client.loop())
+    {
+      debugSerial.print(mqtt_broker_name);
+      debugSerial.print(" lost MQTT at: ");
+      debugSerial.println(millis());
+      requestMqttReconnect();
+    }
+  }
+  else if (mqttReconnectRequested || WiFi.status() == WL_CONNECTED)
+  {
     reconnect();
   }
 
@@ -1861,4 +1906,5 @@ void loop()
   //   cnt_actions++;
   //   navigate_to_n_and_execute(cnt_actions % 3);
   // }
+  yield();
 }
