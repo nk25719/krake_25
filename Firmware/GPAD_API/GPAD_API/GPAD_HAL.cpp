@@ -239,12 +239,15 @@ namespace
   const uint8_t LCD_ROWS = 4;
   const uint8_t LCD_STATUS_COL = 16;
   const uint8_t LCD_MAIN_WIDTH = LCD_STATUS_COL;
+  const uint8_t LCD_ALARM_WINDOW_WIDTH = LCD_COLS * 2;
   const uint8_t ICON_WIFI = 1;
   const uint8_t ICON_BROKER = 2;
   const uint8_t ICON_VOLUME = 3;
   const uint8_t ICON_MUTE = 4;
   const uint8_t ICON_SETTINGS = 5;
   const unsigned long LCD_RENDER_MIN_INTERVAL_MS = 150;
+  const unsigned long LCD_SCROLL_STEP_MS = 400;
+  const unsigned long LCD_SCROLL_PAUSE_MS = 1500;
 
   bool alarmUiUpdatePending = false;
   bool alarmAudioUpdatePending = false;
@@ -258,6 +261,10 @@ namespace
   uint8_t alarmActionSelection = 0;
   uint8_t alarmQueueCount = 0;
   unsigned long lastLcdRenderMs = 0;
+  char alarmDisplayBuffer[128] = "";
+  size_t scrollIndex = 0;
+  unsigned long lastScrollMs = 0;
+  bool scrollEnabled = false;
   enum LcdFocus : uint8_t
   {
     FOCUS_ALARM_ACTIONS = 0,
@@ -392,6 +399,28 @@ namespace
       row[col + written] = text[written];
       written++;
     }
+  }
+
+  void renderTwoLineMessageWindow(char rows[LCD_ROWS][LCD_COLS + 1], const char *msg, size_t offset)
+  {
+    char alarmWindow[LCD_ALARM_WINDOW_WIDTH + 1];
+    memset(alarmWindow, ' ', LCD_ALARM_WINDOW_WIDTH);
+    alarmWindow[LCD_ALARM_WINDOW_WIDTH] = '\0';
+
+    const size_t len = strlen(msg);
+    for (size_t i = 0; i < LCD_ALARM_WINDOW_WIDTH; i++)
+    {
+      size_t src = offset + i;
+      if (src < len)
+      {
+        alarmWindow[i] = msg[src];
+      }
+    }
+
+    memcpy(rows[1], alarmWindow, LCD_COLS);
+    rows[1][LCD_COLS] = '\0';
+    memcpy(rows[2], alarmWindow + LCD_COLS, LCD_COLS);
+    rows[2][LCD_COLS] = '\0';
   }
 
   void formatMain(char *row, const char *fmt, ...)
@@ -1892,38 +1921,63 @@ void showStatusLCD(AlarmLevel level, bool muted, char *msg)
       formatMain(rows[0], "Q:1");
     }
 
+    char displayText[sizeof(alarmDisplayBuffer)];
     if (currentAlarmType[0] != '\0')
     {
-      formatMain(rows[1], "%s %s", alarmLevelLabel(level), currentAlarmType);
+      snprintf(displayText, sizeof(displayText), "%s %s %s", alarmLevelLabel(level), currentAlarmType, cleanMsg);
     }
     else
     {
-      formatMain(rows[1], "%s %s", alarmLevelLabel(level), cleanMsg);
+      snprintf(displayText, sizeof(displayText), "%s %s", alarmLevelLabel(level), cleanMsg);
     }
 
-    if (currentAlarmId[0] != '\0')
+    const size_t displayLen = strlen(displayText);
+    if (displayLen <= LCD_ALARM_WINDOW_WIDTH)
     {
-      formatMain(rows[2], "ID:%s %s", currentAlarmId, cleanMsg);
+      scrollEnabled = false;
+      scrollIndex = 0;
+      lastScrollMs = millis();
+      renderTwoLineMessageWindow(rows, displayText, 0);
     }
     else
     {
-      formatMain(rows[2], "%s", cleanMsg);
+      if (!scrollEnabled || strcmp(alarmDisplayBuffer, displayText) != 0)
+      {
+        strncpy(alarmDisplayBuffer, displayText, sizeof(alarmDisplayBuffer) - 1);
+        alarmDisplayBuffer[sizeof(alarmDisplayBuffer) - 1] = '\0';
+        scrollIndex = 0;
+        lastScrollMs = millis();
+        scrollEnabled = true;
+      }
+
+      const unsigned long now = millis();
+      const size_t maxScrollIndex = displayLen - LCD_ALARM_WINDOW_WIDTH;
+      if (scrollIndex > maxScrollIndex)
+      {
+        scrollIndex = maxScrollIndex;
+      }
+
+      const bool atEnd = (scrollIndex == maxScrollIndex);
+      const unsigned long intervalMs = atEnd ? LCD_SCROLL_PAUSE_MS : LCD_SCROLL_STEP_MS;
+      if ((now - lastScrollMs) >= intervalMs)
+      {
+        if (atEnd)
+        {
+          scrollIndex = 0;
+        }
+        else
+        {
+          scrollIndex++;
+        }
+        lastScrollMs = now;
+      }
+
+      renderTwoLineMessageWindow(rows, alarmDisplayBuffer, scrollIndex);
     }
 
     if (lcdUiState == ALARM_ACTION_SELECT)
     {
-      if (alarmActionSelection == 0)
-      {
-        formatFullRow(rows[3], "Ack Dismiss Shelve");
-      }
-      else if (alarmActionSelection == 1)
-      {
-        formatFullRow(rows[3], "Ack Dismiss Shelve");
-      }
-      else
-      {
-        formatFullRow(rows[3], "Ack Dismiss Shelve");
-      }
+      formatFullRow(rows[3], "Ack Dismiss Shelve");
     }
 
     if (lcdUiState == ACTION_FEEDBACK)
