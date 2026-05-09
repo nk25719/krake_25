@@ -285,8 +285,13 @@ unsigned long nextLEDchangee_ms = 5000; // time in ms.
 
 //wifi disconnect event
 void onWiFiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info) {
-  debugSerial.print("\nWifi Disconnected. Reason: ");
+#if (DEBUG > 0)
+  debugSerial.print(F("\nWifi Disconnected. Reason: "));
   debugSerial.println(info.wifi_sta_disconnected.reason);
+#else
+  (void)event;
+  (void)info;
+#endif
   
   // OPTION A: Simple Reconnect
   //WiFi.begin(); 
@@ -302,14 +307,15 @@ void onWiFiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info) {
 void serialSplash()
 {
   // Serial splash
+#if (DEBUG > 0)
   debugSerial.println(F("==================================="));
-  debugSerial.println(COMPANY_NAME);
-  debugSerial.println(MODEL_NAME);
+  debugSerial.println(F(COMPANY_NAME));
+  debugSerial.println(F(MODEL_NAME));
   //  debugSerial.println(DEVICE_UNDER_TEST);
-  debugSerial.print(PROG_NAME);
-  debugSerial.println(FIRMWARE_VERSION);
+  debugSerial.print(F(PROG_NAME));
+  debugSerial.println(F(FIRMWARE_VERSION));
   //  debugSerial.println(HARDWARE_VERSION);
-  debugSerial.print("Builtin ESP32 MAC Address: ");
+  debugSerial.print(F("Builtin ESP32 MAC Address: "));
   debugSerial.println(macAddressString);
   debugSerial.print(F("Alarm Topic: "));
   debugSerial.println(subscribe_Alarm_Topic);
@@ -317,9 +323,10 @@ void serialSplash()
   debugSerial.println(mqtt_broker_name);
   debugSerial.print(F("Compiled at: "));
   debugSerial.println(F(__DATE__ " " __TIME__)); // compile date that is used for a unique identifier
-  debugSerial.println(LICENSE);
+  debugSerial.println(F(LICENSE));
   debugSerial.println(F("==================================="));
   debugSerial.println();
+#endif
 }
 
 // A periodic message identifying the subscriber (Krake) is on line.
@@ -1312,6 +1319,20 @@ String templateProcessor(const String &var)
   return WifiOTA::processor(var);
 }
 
+void sendStaticFile(AsyncWebServerRequest *request, const char *path, const char *contentType)
+{
+  char gzipPath[64];
+  snprintf(gzipPath, sizeof(gzipPath), "%s.gz", path);
+  if (LittleFS.exists(gzipPath))
+  {
+    AsyncWebServerResponse *response = request->beginResponse(LittleFS, gzipPath, contentType);
+    response->addHeader("Content-Encoding", "gzip");
+    request->send(response);
+    return;
+  }
+  request->send(LittleFS, path, contentType);
+}
+
 // Elegant OTA Setup
 
 void setupOTA()
@@ -1325,10 +1346,10 @@ void setupOTA()
             { request->send(LittleFS, "/monitor.html", "text/html", false, templateProcessor); });
 
   server.on("/device-monitor", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/device-monitor.html", "text/html"); });
+            { sendStaticFile(request, "/device-monitor.html", "text/html"); });
 
   server.on("/device-monitor.html", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/device-monitor.html", "text/html"); });
+            { sendStaticFile(request, "/device-monitor.html", "text/html"); });
 
   server.on("/debug-logs", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->redirect("/monitor"); });
@@ -1368,22 +1389,22 @@ void setupOTA()
               request->send(200, "text/plain", serialLogBuffer); });
 
   server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/settings.html", "text/html"); });
+            { sendStaticFile(request, "/settings.html", "text/html"); });
 
   server.on("/setup", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/setup.html", "text/html"); });
+            { sendStaticFile(request, "/setup.html", "text/html"); });
 
   server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *request)
             {
               String ssid;
               String password;
               const bool hasStored = wifiManager.loadCredentials(ssid, password);
-              std::vector<WifiOTA::Manager::Credential> credentials;
+              WifiOTA::Manager::CredentialList credentials;
               wifiManager.loadCredentialsList(credentials);
               String payload = "{";
               payload += "\"hasStored\":" + String(hasStored ? "true" : "false") + ",";
               payload += "\"ssid\":\"" + jsonEscape(ssid) + "\",";
-              payload += "\"count\":" + String(credentials.size());
+              payload += "\"count\":" + String(credentials.count);
               payload += "}";
               request->send(200, "application/json", payload); });
 
@@ -1423,13 +1444,13 @@ void setupOTA()
               request->send(200, "text/plain", "wifi.json saved"); });
 
   server.on("/manual", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/manual.html", "text/html"); });
+            { sendStaticFile(request, "/manual.html", "text/html"); });
 
   server.on("/PMD_GPAD_API", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/PMD_GPAD_API.html", "text/html"); });
+            { sendStaticFile(request, "/PMD_GPAD_API.html", "text/html"); });
 
   server.on("/PMD_GPAD_API.html", HTTP_GET, [](AsyncWebServerRequest *request)
-            { request->send(LittleFS, "/PMD_GPAD_API.html", "text/html"); });
+            { sendStaticFile(request, "/PMD_GPAD_API.html", "text/html"); });
 
   server.on("/settings-data", HTTP_GET, [](AsyncWebServerRequest *request)
             {
@@ -1689,9 +1710,30 @@ void setupOTA()
   server.serveStatic("/", LittleFS, "/");
 
   server.onNotFound([](AsyncWebServerRequest *request)
-                    { request->send(LittleFS, "/404.html", "text/html"); });
+                    { sendStaticFile(request, "/404.html", "text/html"); });
 
   // End of ELegant OTA Setup
+}
+
+void handleWifiConnected()
+{
+#if defined HMWK || defined KRAKE
+  if (!client.connected())
+  {
+    reconnect(true);
+  }
+#endif
+
+  clearLCD();
+  IPAddress currentAddress = wifiManager.getAddress();
+  splashLCD(wifiManager.getMode(), currentAddress);
+}
+
+void handleWifiApStarted()
+{
+  clearLCD();
+  IPAddress currentAddress = wifiManager.getAddress();
+  splashLCD(wifiManager.getMode(), currentAddress);
 }
 
 void setup()
@@ -1821,59 +1863,57 @@ void setup()
   // req for Wifi Man and OTA
 
 #if defined HMWK || defined KRAKE
-  auto connectedCallback = [&]()
-  {
-    if (!client.connected())
-    {
-      reconnect(true);
-    }
-
-    clearLCD();
-    IPAddress currentAddress = wifiManager.getAddress();
-    splashLCD(wifiManager.getMode(), currentAddress);
-  };
-  wifiManager.setConnectedCallback(connectedCallback);
+  wifiManager.setConnectedCallback(handleWifiConnected);
 #endif
 
-  auto apStartedCallback = [&]()
-  {
-    clearLCD();
-    IPAddress currentAddress = wifiManager.getAddress();
-    splashLCD(wifiManager.getMode(), currentAddress);
-  };
-  wifiManager.setApStartedCallback(apStartedCallback);
+  wifiManager.setApStartedCallback(handleWifiApStarted);
 
   wifiManager.connect(setupSsid);
 
+#if (DEBUG > 0)
   debugSerial.println(F("WiFi Manager connected."));
-
   debugSerial.println(F("initLiffleFS"));
+#endif
 
   setupOTA();
+#if (DEBUG > 0)
   debugSerial.println(F("setupOTA"));
+#endif
 
   ElegantOTA.begin(&server);
+#if (DEBUG > 0)
   debugSerial.println(F("ElegantOTA.begin"));
+#endif
 
   server.begin(); // Start server web socket to render pages
+#if (DEBUG > 0)
   debugSerial.println(F("Start server web socket to render pages"));
+#endif
 
 
   initRotator();
+#if (DEBUG > 0)
   debugSerial.println(F("initRotator"));
+#endif
   splashLCD(wifiManager.getMode(), wifiManager.getAddress());
 
+#if (DEBUG > 0)
   debugSerial.println(F("splashLCD"));
+#endif
 
   setupDFPlayer();
+#if (DEBUG > 0)
   debugSerial.println(F("setupDFPlayer"));
+#endif
 
   setup_GPAD_menu();
 
+#if (DEBUG > 0)
   debugSerial.println(F("setupGPAD_menu"));
 
     // Need this to work here:   printInstructions(serialport);
   debugSerial.println(F("Done With Setup!"));
+#endif
   turnOnAllLamps();
   digitalWrite(LED_BUILTIN, LOW); // turn the LED off at end of setup
 } // end of setup()

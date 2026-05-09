@@ -1,9 +1,10 @@
 #include "DFPlayer.h"
 #include "gpad_utility.h"
+#include "debug_macros.h"
 #include <DFRobotDFPlayerMini.h>
 
 DFRobotDFPlayerMini dfPlayer;
-HardwareSerial mySerial1(2); // Use UART2
+extern HardwareSerial uartSerial2;
 
 const int LED_PIN = 13; // Krake
 const int nDFPlayer_BUSY = 4; // active LOW BUSY pin from DFPlayer
@@ -17,27 +18,26 @@ int pausa = 0;
 
 void serialSplashDFP()
 {
-  Serial.println("===================================");
-  Serial.println(DEVICE_UNDER_TEST);
-  Serial.print(PROG_NAME);
-  Serial.println(FIRMWARE_VERSION);
-  Serial.print("Compiled at: ");
-  Serial.println(F(__DATE__ " " __TIME__));
-  Serial.println("===================================");
-  Serial.println();
+  DBG_PRINTLN(F("==================================="));
+  DBG_PRINTLN(F(DEVICE_UNDER_TEST));
+  DBG_PRINT(F(PROG_NAME));
+  DBG_PRINTLN(F(FIRMWARE_VERSION));
+  DBG_PRINT(F("Compiled at: "));
+  DBG_PRINTLN(F(__DATE__ " " __TIME__));
+  DBG_PRINTLN(F("==================================="));
 }
 
 void menu_opcoes()
 {
-  Serial.println();
-  Serial.println(F("=================================================================================================================================="));
-  Serial.println(F("Commands:"));
-  Serial.println(F(" [1-9] select MP3 file"));
-  Serial.println(F(" [s] stop playback"));
-  Serial.println(F(" [p] pause/continue"));
-  Serial.println(F(" [+/-] increase/decrease volume"));
-  Serial.println(F(" [</>] previous/next track"));
-  Serial.println(F("================================================================================================================================="));
+  DBG_PRINTLN(F(""));
+  DBG_PRINTLN(F("=================================================================================================================================="));
+  DBG_PRINTLN(F("Commands:"));
+  DBG_PRINTLN(F(" [1-9] select MP3 file"));
+  DBG_PRINTLN(F(" [s] stop playback"));
+  DBG_PRINTLN(F(" [p] pause/continue"));
+  DBG_PRINTLN(F(" [+/-] increase/decrease volume"));
+  DBG_PRINTLN(F(" [</>] previous/next track"));
+  DBG_PRINTLN(F("================================================================================================================================="));
 }
 
 void checkSerial(void)
@@ -49,8 +49,8 @@ void checkSerial(void)
     if ((command >= '1') && (command <= '9'))
     {
       int track = command - '0';
-      Serial.print("Playing track: ");
-      Serial.println(track);
+      DBG_PRINT(F("Playing track: "));
+      DBG_PRINTLN(track);
       dfPlayer.play(track);
       menu_opcoes();
     }
@@ -58,7 +58,7 @@ void checkSerial(void)
     if (command == 's')
     {
       dfPlayer.stop();
-      Serial.println("Music stopped.");
+      DBG_PRINTLN(F("Music stopped."));
       menu_opcoes();
     }
 
@@ -67,12 +67,12 @@ void checkSerial(void)
       pausa = !pausa;
       if (pausa == 0)
       {
-        Serial.println("Continue...");
+        DBG_PRINTLN(F("Continue..."));
         dfPlayer.start();
       }
       else
       {
-        Serial.println("Music paused.");
+        DBG_PRINTLN(F("Music paused."));
         dfPlayer.pause();
       }
       menu_opcoes();
@@ -81,30 +81,30 @@ void checkSerial(void)
     if (command == '+')
     {
       dfPlayer.volumeUp();
-      Serial.print("Current volume: ");
-      Serial.println(dfPlayer.readVolume());
+      DBG_PRINT(F("Current volume: "));
+      DBG_PRINTLN(dfPlayer.readVolume());
       menu_opcoes();
     }
 
     if (command == '-')
     {
       dfPlayer.volumeDown();
-      Serial.print("Current volume: ");
-      Serial.println(dfPlayer.readVolume());
+      DBG_PRINT(F("Current volume: "));
+      DBG_PRINTLN(dfPlayer.readVolume());
       menu_opcoes();
     }
 
     if (command == '<')
     {
       dfPlayer.previous();
-      Serial.println("Previous track.");
+      DBG_PRINTLN(F("Previous track."));
       menu_opcoes();
     }
 
     if (command == '>')
     {
       dfPlayer.next();
-      Serial.println("Next track.");
+      DBG_PRINTLN(F("Next track."));
       menu_opcoes();
     }
   }
@@ -127,48 +127,48 @@ void setupDFPlayer()
 {
   pinMode(nDFPlayer_BUSY, INPUT_PULLUP);
 
-  Serial.println("UART2 Begin for DFPlayer");
-  mySerial1.begin(BAUD_DFPLAYER, SERIAL_8N1, RXD2, TXD2);
+  DBG_PRINTLN(F("UART2 Begin for DFPlayer"));
+  uartSerial2.begin(BAUD_DFPLAYER, SERIAL_8N1, RXD2, TXD2);
   delayWithYield(1000);
 
   // ACK=false is safer for DFPlayer clones and avoids repeated blocking/timeouts.
-  Serial.println("Begin DFPlayer: ACK=false, doReset=false");
-  if (!dfPlayer.begin(mySerial1, false, false))
+  DBG_PRINTLN(F("Begin DFPlayer: ACK=false, doReset=false"));
+  if (!dfPlayer.begin(uartSerial2, false, false))
   {
-    Serial.println("DFPlayer Mini not detected or not responding.");
-    Serial.println("Check wiring, power, SD card, and file names.");
+    DBG_PRINTLN(F("DFPlayer Mini not detected or not responding."));
+    DBG_PRINTLN(F("Check wiring, power, SD card, and file names."));
     isDFPlayerDetected = false;
     return;
   }
 
   isDFPlayerDetected = true;
-  Serial.println("DFPlayer Mini detected.");
+  DBG_PRINTLN(F("DFPlayer Mini detected."));
 
   dfPlayer.setTimeOut(500);
   delayWithYield(300);
 
   // This may return unusual values on clones. Do not disable audio only because of this.
   int moduleState = dfPlayer.readState();
-  Serial.print("DFPlayer state after init: ");
-  Serial.println(moduleState);
+  DBG_PRINT(F("DFPlayer state after init: "));
+  DBG_PRINTLN(moduleState);
   if (moduleState > 0)
   {
-    Serial.println("Warning: unusual DFPlayer state. Possible clone/module variant, continuing test.");
+    DBG_PRINTLN(F("Warning: unusual DFPlayer state. Possible clone/module variant, continuing test."));
   }
 
   dfPlayer.volume(volumeDFPlayer);
   delayWithYield(300);
 
   numberFilesDF = dfPlayer.readFileCounts();
-  Serial.print("SD card file count: ");
-  Serial.println(numberFilesDF);
+  DBG_PRINT(F("SD card file count: "));
+  DBG_PRINTLN(numberFilesDF);
 
   if (numberFilesDF <= 0)
   {
-    Serial.println("Warning: no audio files detected. Use FAT32 SD card and files like 0001.mp3, 0002.mp3.");
+    DBG_PRINTLN(F("Warning: no audio files detected. Use FAT32 SD card and files like 0001.mp3, 0002.mp3."));
   }
 
-  Serial.println("DFPlayer startup test: playing track 1.");
+  DBG_PRINTLN(F("DFPlayer startup test: playing track 1."));
   dfPlayer.play(1);
   delayWithYield(3000); // Give enough time to hear output without starving the scheduler/WDT.
 
@@ -192,34 +192,35 @@ void displayDFPlayerStats()
 {
   if (!isDFPlayerDetected)
   {
-    Serial.println("DFPlayer stats unavailable: module not detected.");
+    DBG_PRINTLN(F("DFPlayer stats unavailable: module not detected."));
     return;
   }
 
-  Serial.println("================= DFPlayer Stats =================");
-  Serial.print("DFPlayer State: ");
-  Serial.println(dfPlayer.readState());
+  DBG_PRINTLN(F("================= DFPlayer Stats ================="));
+  DBG_PRINT(F("DFPlayer State: "));
+  DBG_PRINTLN(dfPlayer.readState());
 
-  Serial.print("DFPlayer Volume: ");
-  Serial.println(dfPlayer.readVolume());
+  DBG_PRINT(F("DFPlayer Volume: "));
+  DBG_PRINTLN(dfPlayer.readVolume());
 
-  Serial.print("DFPlayer EQ: ");
-  Serial.println(dfPlayer.readEQ());
+  DBG_PRINT(F("DFPlayer EQ: "));
+  DBG_PRINTLN(dfPlayer.readEQ());
 
-  Serial.print("SD Card File Count: ");
+  DBG_PRINT(F("SD Card File Count: "));
   numberFilesDF = dfPlayer.readFileCounts();
-  Serial.println(numberFilesDF);
+  DBG_PRINTLN(numberFilesDF);
 
-  Serial.print("Current File Number: ");
-  Serial.println(dfPlayer.readCurrentFileNumber());
+  DBG_PRINT(F("Current File Number: "));
+  DBG_PRINTLN(dfPlayer.readCurrentFileNumber());
 
-  Serial.print("BUSY pin: ");
-  Serial.println(digitalRead(nDFPlayer_BUSY) == LOW ? "LOW / playing" : "HIGH / idle");
-  Serial.println("==================================================");
+  DBG_PRINT(F("BUSY pin: "));
+  DBG_PRINTLN(digitalRead(nDFPlayer_BUSY) == LOW ? F("LOW / playing") : F("HIGH / idle"));
+  DBG_PRINTLN(F("=================================================="));
 }
 
 void printDetail(uint8_t type, int value)
 {
+#if (DEBUG_LEVEL > 0)
   switch (type)
   {
   case TimeOut:
@@ -281,6 +282,10 @@ void printDetail(uint8_t type, int value)
   default:
     break;
   }
+#else
+  (void)type;
+  (void)value;
+#endif
 }
 
 void dfPlayerUpdate(void)
@@ -297,14 +302,14 @@ void playNotBusy()
 {
   if (!isDFPlayerDetected) return;
 
-  Serial.println("playNotBusy");
+  DBG_PRINTLN(F("playNotBusy"));
   if (digitalRead(nDFPlayer_BUSY) == HIGH)
   {
     dfPlayer.next();
   }
   else
   {
-    Serial.println("DFPlayer is still busy/playing.");
+    DBG_PRINTLN(F("DFPlayer is still busy/playing."));
   }
 
   if (dfPlayer.available())
@@ -319,25 +324,25 @@ void playNotBusyLevel(int level)
 
   if (currentlyMuted)
   {
-    Serial.println("Muted: skipping DFPlayer playback.");
+    DBG_PRINTLN(F("Muted: skipping DFPlayer playback."));
     return;
   }
 
      if (level <= 0)
   {
-    Serial.println("Silent level: skipping DFPlayer playback.");
+    DBG_PRINTLN(F("Silent level: skipping DFPlayer playback."));
     return;
   }
 
-  Serial.println("playNotBusyLevel");
+  DBG_PRINTLN(F("playNotBusyLevel"));
   if (digitalRead(nDFPlayer_BUSY) == HIGH)
   {
     dfPlayer.play(level + 1);
-    Serial.println("Track command sent.");
+    DBG_PRINTLN(F("Track command sent."));
   }
   else
   {
-    Serial.println("DFPlayer is still busy/playing.");
+    DBG_PRINTLN(F("DFPlayer is still busy/playing."));
   }
 
   if (dfPlayer.available())
@@ -355,7 +360,7 @@ bool playAlarmLevel(int alarmNumberToPlay)
 
   if (currentlyMuted)
   {
-    Serial.println("Muted: skipping alarm playback.");
+    DBG_PRINTLN(F("Muted: skipping alarm playback."));
     return false;
   }
 
@@ -377,20 +382,20 @@ bool playAlarmLevel(int alarmNumberToPlay)
 
   if (trackNumber <= 0 || trackNumber > numberFilesDF)
   {
-    Serial.print("Invalid DFPlayer track number: ");
-    Serial.println(trackNumber);
+    DBG_PRINT(F("Invalid DFPlayer track number: "));
+    DBG_PRINTLN(trackNumber);
     return false;
   }
 
   if (digitalRead(nDFPlayer_BUSY) == HIGH)
   {
-    Serial.print("Playing alarm track: ");
-    Serial.println(trackNumber);
+    DBG_PRINT(F("Playing alarm track: "));
+    DBG_PRINTLN(trackNumber);
     dfPlayer.play(trackNumber);
   }
   else
   {
-    Serial.println("Not done playing previous file.");
+    DBG_PRINTLN(F("Not done playing previous file."));
     return false;
   }
 

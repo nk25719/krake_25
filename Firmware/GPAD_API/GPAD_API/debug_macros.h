@@ -3,8 +3,12 @@
 
 #include <Arduino.h>
 
+#ifndef DEBUG_LEVEL
+#define DEBUG_LEVEL 0
+#endif
+
 #ifndef GPAD_DEBUG
-#define GPAD_DEBUG 0
+#define GPAD_DEBUG DEBUG_LEVEL
 #endif
 
 #if (GPAD_DEBUG > 0)

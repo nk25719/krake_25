@@ -4,7 +4,6 @@
 namespace
 {
   const char *WIFI_CREDENTIALS_PATH = "/wifi.json";
-  constexpr size_t MAX_SAVED_WIFI_NETWORKS = 20;
 
   String jsonEscape(const String &value)
   {
@@ -92,7 +91,7 @@ int WiFiLed = 2; // Modify based on actual LED pin
 using namespace WifiOTA;
 
 Manager::Manager(WiFiClass &wifi, Print &print)
-    : wifi(wifi), print(print)
+    : wifi(wifi), print(print), connectedCallback(nullptr), apStartedCallback(nullptr)
 {
 }
 
@@ -107,21 +106,23 @@ Manager::~Manager() {}
 
 void Manager::connect(const char *const accessPointSsid)
 {
-  std::vector<Credential> credentials;
+  CredentialList credentials;
   if (this->loadCredentialsList(credentials))
   {
-    for (size_t index = 0; index < credentials.size(); ++index)
+    for (size_t index = 0; index < credentials.count; ++index)
     {
-      this->print.print("Trying saved WiFi ");
+#if (DEBUG_LEVEL > 0)
+      this->print.print(F("Trying saved WiFi "));
       this->print.print(index + 1);
-      this->print.print("/");
-      this->print.print(credentials.size());
-      this->print.print(": ");
-      this->print.println(credentials[index].ssid);
+      this->print.print(F("/"));
+      this->print.print(credentials.count);
+      this->print.print(F(": "));
+      this->print.println(credentials.items[index].ssid);
+#endif
 
-      if (this->connectStoredCredentials(credentials[index].ssid, credentials[index].password))
+      if (this->connectStoredCredentials(credentials.items[index].ssid, credentials.items[index].password))
       {
-        this->print.println("Connected using stored wifi.json credentials.");
+        this->print.println(F("Connected using stored wifi.json credentials."));
         this->ipSet();
         return;
       }
@@ -171,16 +172,16 @@ void Manager::startPortal(const char *const accessPointSsid)
 
   if (!connectSuccess)
   {
-    this->print.println("WiFiManager portal completed without connection.");
+    this->print.println(F("WiFiManager portal completed without connection."));
   }
 }
 
-void Manager::setConnectedCallback(std::function<void()> callback)
+void Manager::setConnectedCallback(Callback callback)
 {
   this->connectedCallback = callback;
 }
 
-void Manager::setApStartedCallback(std::function<void()> callback)
+void Manager::setApStartedCallback(Callback callback)
 {
   this->apStartedCallback = callback;
 }
@@ -211,47 +212,43 @@ bool Manager::saveCredentials(const String &ssid, const String &password)
   trimmedPassword.trim();
   if (trimmedSsid.length() == 0 || trimmedPassword.length() == 0)
   {
-    this->print.println("SSID and password are required.");
+    this->print.println(F("SSID and password are required."));
     return false;
   }
 
-  std::vector<Credential> credentials;
+  CredentialList credentials;
   this->loadCredentialsList(credentials);
 
-  std::vector<Credential> updated;
-  updated.reserve(credentials.size() + 1);
+  CredentialList updated;
+  updated.count = 0;
 
-  updated.push_back({trimmedSsid, trimmedPassword});
-  for (size_t i = 0; i < credentials.size(); ++i)
+  updated.items[updated.count++] = {trimmedSsid, trimmedPassword};
+  for (size_t i = 0; i < credentials.count; ++i)
   {
-    if (credentials[i].ssid != trimmedSsid)
+    if (credentials.items[i].ssid != trimmedSsid && updated.count < MAX_SAVED_WIFI_NETWORKS)
     {
-      updated.push_back(credentials[i]);
-    }
-    if (updated.size() >= MAX_SAVED_WIFI_NETWORKS)
-    {
-      break;
+      updated.items[updated.count++] = credentials.items[i];
     }
   }
 
   File file = LittleFS.open(WIFI_CREDENTIALS_PATH, "w");
   if (!file)
   {
-    this->print.println("Failed to open wifi.json for writing.");
+    this->print.println(F("Failed to open wifi.json for writing."));
     return false;
   }
 
   String payload = "{\"networks\":[";
-  for (size_t i = 0; i < updated.size(); ++i)
+  for (size_t i = 0; i < updated.count; ++i)
   {
     if (i > 0)
     {
       payload += ",";
     }
     payload += "{\"ssid\":\"";
-    payload += jsonEscape(updated[i].ssid);
+    payload += jsonEscape(updated.items[i].ssid);
     payload += "\",\"password\":\"";
-    payload += jsonEscape(updated[i].password);
+    payload += jsonEscape(updated.items[i].password);
     payload += "\"}";
   }
   payload += "]}";
@@ -263,20 +260,20 @@ bool Manager::saveCredentials(const String &ssid, const String &password)
 
 bool Manager::loadCredentials(String &ssid, String &password)
 {
-  std::vector<Credential> credentials;
-  if (!this->loadCredentialsList(credentials) || credentials.empty())
+  CredentialList credentials;
+  if (!this->loadCredentialsList(credentials) || credentials.count == 0)
   {
     return false;
   }
 
-  ssid = credentials[0].ssid;
-  password = credentials[0].password;
+  ssid = credentials.items[0].ssid;
+  password = credentials.items[0].password;
   return true;
 }
 
-bool Manager::loadCredentialsList(std::vector<Credential> &credentials)
+bool Manager::loadCredentialsList(CredentialList &credentials)
 {
-  credentials.clear();
+  credentials.count = 0;
   if (!LittleFS.exists(WIFI_CREDENTIALS_PATH))
   {
     return false;
@@ -285,7 +282,7 @@ bool Manager::loadCredentialsList(std::vector<Credential> &credentials)
   File file = LittleFS.open(WIFI_CREDENTIALS_PATH, "r");
   if (!file)
   {
-    this->print.println("Failed to open wifi.json for reading.");
+    this->print.println(F("Failed to open wifi.json for reading."));
     return false;
   }
 
@@ -293,7 +290,7 @@ bool Manager::loadCredentialsList(std::vector<Credential> &credentials)
   file.close();
 
   int searchPos = 0;
-  while (credentials.size() < MAX_SAVED_WIFI_NETWORKS)
+  while (credentials.count < MAX_SAVED_WIFI_NETWORKS)
   {
     const int ssidKeyPos = content.indexOf("\"ssid\"", searchPos);
     if (ssidKeyPos < 0)
@@ -326,9 +323,9 @@ bool Manager::loadCredentialsList(std::vector<Credential> &credentials)
     if (loadedSsid.length() > 0 && loadedPassword.length() > 0)
     {
       bool alreadyExists = false;
-      for (size_t i = 0; i < credentials.size(); ++i)
+      for (size_t i = 0; i < credentials.count; ++i)
       {
-        if (credentials[i].ssid == loadedSsid)
+        if (credentials.items[i].ssid == loadedSsid)
         {
           alreadyExists = true;
           break;
@@ -337,14 +334,14 @@ bool Manager::loadCredentialsList(std::vector<Credential> &credentials)
 
       if (!alreadyExists)
       {
-        credentials.push_back({loadedSsid, loadedPassword});
+        credentials.items[credentials.count++] = {loadedSsid, loadedPassword};
       }
     }
 
     searchPos = passwordEndPos + 1;
   }
 
-  if (!credentials.empty())
+  if (credentials.count > 0)
   {
     return true;
   }
@@ -354,7 +351,7 @@ bool Manager::loadCredentialsList(std::vector<Credential> &credentials)
   String legacyPassword;
   if (!extractJsonString(content, "ssid", legacySsid) || !extractJsonString(content, "password", legacyPassword))
   {
-    this->print.println("wifi.json missing required keys.");
+    this->print.println(F("wifi.json missing required keys."));
     return false;
   }
 
@@ -362,18 +359,20 @@ bool Manager::loadCredentialsList(std::vector<Credential> &credentials)
   legacyPassword.trim();
   if (legacySsid.length() == 0 || legacyPassword.length() == 0)
   {
-    this->print.println("wifi.json has invalid SSID/password.");
+    this->print.println(F("wifi.json has invalid SSID/password."));
     return false;
   }
 
-  credentials.push_back({legacySsid, legacyPassword});
+  credentials.items[credentials.count++] = {legacySsid, legacyPassword};
   return true;
 }
 
 bool Manager::connectStoredCredentials(const String &ssid, const String &password, unsigned long timeoutMs)
 {
-  this->print.print("Attempting connection from wifi.json SSID: ");
+#if (DEBUG_LEVEL > 0)
+  this->print.print(F("Attempting connection from wifi.json SSID: "));
   this->print.println(ssid);
+#endif
 
   this->wifi.begin(ssid.c_str(), password.c_str());
   const unsigned long startMs = millis();
@@ -386,27 +385,31 @@ bool Manager::connectStoredCredentials(const String &ssid, const String &passwor
     delay(250);
   }
 
-  this->print.println("Stored wifi.json credentials failed to connect.");
+  this->print.println(F("Stored wifi.json credentials failed to connect."));
   this->wifi.disconnect(true, false);
   return false;
 }
 
 void Manager::ssidSaved()
 {
-  this->print.print("Network Saved with SSID: ");
+#if (DEBUG_LEVEL > 0)
+  this->print.print(F("Network Saved with SSID: "));
   this->print.print(this->wifi.SSID());
-  this->print.print("\n");
+  this->print.print(F("\n"));
+#endif
 }
 
 void Manager::ipSet()
 {
-  this->print.print("Connected to Network: ");
+#if (DEBUG_LEVEL > 0)
+  this->print.print(F("Connected to Network: "));
   this->print.print(this->wifi.SSID());
-  this->print.print("\n");
+  this->print.print(F("\n"));
 
-  this->print.print("Obtained IP Address: ");
+  this->print.print(F("Obtained IP Address: "));
   this->wifi.localIP().printTo(Serial);
-  this->print.print("\n");
+  this->print.print(F("\n"));
+#endif
 
   if (this->connectedCallback)
   {
@@ -416,9 +419,11 @@ void Manager::ipSet()
 
 void Manager::apStarted()
 {
-  this->print.print("AP Has Started: ");
+#if (DEBUG_LEVEL > 0)
+  this->print.print(F("AP Has Started: "));
   this->wifi.softAPIP().printTo(this->print);
-  this->print.print("\n");
+  this->print.print(F("\n"));
+#endif
 
   if (this->apStartedCallback)
   {
@@ -430,7 +435,7 @@ void WifiOTA::initLittleFS()
 {
   if (!LittleFS.begin(true))
   {
-    Serial.println("An error occurred while mounting LittleFS.");
+    Serial.println(F("An error occurred while mounting LittleFS."));
   }
   else
   {

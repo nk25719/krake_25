@@ -4,7 +4,6 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <LittleFS.h>
-#include <vector>
 
 extern const char *DEFAULT_SSID;
 extern String ledState;
@@ -20,26 +19,33 @@ namespace WifiOTA
             String ssid;
             String password;
         };
+        static const size_t MAX_SAVED_WIFI_NETWORKS = 20;
+        struct CredentialList
+        {
+            Credential items[MAX_SAVED_WIFI_NETWORKS];
+            size_t count;
+        };
+        typedef void (*Callback)();
 
         Manager(WiFiClass &wifi, Print &print);
         ~Manager();
 
         void initialize();
         void connect(const char *const accessPointSsid);
-        void setConnectedCallback(std::function<void()> callBack);
-        void setApStartedCallback(std::function<void()> callback);
+        void setConnectedCallback(Callback callBack);
+        void setApStartedCallback(Callback callback);
         wifi_mode_t getMode();
         IPAddress getAddress();
         bool saveCredentials(const String &ssid, const String &password);
         bool loadCredentials(String &ssid, String &password);
-        bool loadCredentialsList(std::vector<Credential> &credentials);
+        bool loadCredentialsList(CredentialList &credentials);
 
     private:
         WiFiClass &wifi;
         Print &print;
         WiFiManager wifiManager;
-        std::function<void()> connectedCallback;
-        std::function<void()> apStartedCallback;
+        Callback connectedCallback;
+        Callback apStartedCallback;
 
         void ssidSaved();
         void ipSet();
