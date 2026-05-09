@@ -16,7 +16,7 @@ AlarmContent::AlarmContent(const std::size_t messageLength, const Buffer message
 {
     if (this->messageLength > AlarmContent::MAX_LENGTH)
     {
-        throw;
+        this->messageLength = AlarmContent::MAX_LENGTH;
     }
 }
 

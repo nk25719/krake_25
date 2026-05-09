@@ -21,7 +21,8 @@
 #ifndef ALARM_API
 #define ALARM_API
 #include <Stream.h>
-
+extern char currentAlarmId[11];
+extern char currentAlarmType[4];
 enum AlarmLevel
 {
   silent,

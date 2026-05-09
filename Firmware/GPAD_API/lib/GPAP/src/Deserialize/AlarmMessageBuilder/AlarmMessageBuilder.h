@@ -55,6 +55,7 @@ namespace gpap_message::deserialize
 
     public:
         static alarm::AlarmMessage buildAlarmMessage(const char *const buffer, const std::size_t numBytes);
+        static bool isValidAlarmMessage(const char *const buffer, const std::size_t numBytes) noexcept;
         static bool isReservedCharacter(const char character);
 
         AlarmMessageBuilder(const AlarmMessageBuilder &&other) noexcept

@@ -26,10 +26,11 @@
 #include "WiFiManagerOTA.h"
 #include "GPAD_menu.h"
 #include "mqtt_handler.h"
+#include "debug_macros.h"
 #include <esp_system.h>
 #include <Preferences.h>
 #include <driver/uart.h>
-
+#include <GPAPMessage.h>
 using namespace gpad_hal;
 
 
@@ -168,10 +169,13 @@ extern AlarmLevel currentLevel;
 extern bool currentlyMuted;
 extern char AlarmMessageBuffer[81];
 extern unsigned long muteTimeoutEndMillis;
+extern bool running_menu;
 
 extern char macAddressString[13];
 extern int muteTimeoutMinutes;
-
+extern char currentAlarmId[11];
+extern char currentAlarmType[4];
+ 
 // For LCD
 //  #include <LiquidCrystal_I2C.h>
 
@@ -215,6 +219,44 @@ const unsigned LEN_OF_NOTE_MS = 500;
 
 unsigned long start_of_song = 0;
 
+namespace
+{
+  const unsigned long ALARM_UI_MIN_INTERVAL_MS = 250;
+  const unsigned long ALARM_AUDIO_MIN_INTERVAL_MS = 250;
+  const unsigned long ALARM_UI_NORMAL_SETTLE_MS = 25;
+  const unsigned long ALARM_UI_BURST_SETTLE_MS = 150;
+  const unsigned long DFPLAYER_POLL_INTERVAL_MS = 100;
+  const uint8_t ALARM_UI_BURST_REQUEST_COUNT = 3;
+
+  bool alarmUiUpdatePending = false;
+  bool alarmAudioUpdatePending = false;
+  AlarmLevel pendingAlarmAudioLevel = silent;
+  unsigned long lastAlarmUiRequestMs = 0;
+  unsigned long lastAlarmUiUpdateMs = 0;
+  unsigned long lastAlarmAudioUpdateMs = 0;
+  uint8_t alarmUiPendingRequestCount = 0;
+
+  void markAlarmUiAudioPending(bool includeAudio = true)
+  {
+    alarmUiUpdatePending = true;
+    if (includeAudio)
+    {
+      alarmAudioUpdatePending = true;
+      pendingAlarmAudioLevel = currentLevel;
+    }
+    lastAlarmUiRequestMs = millis();
+    if (alarmUiPendingRequestCount < 255)
+    {
+      alarmUiPendingRequestCount++;
+    }
+  }
+
+  bool isDue(const unsigned long now, const unsigned long lastRun, const unsigned long interval)
+  {
+    return lastRun == 0 || (now - lastRun) >= interval;
+  }
+}
+
 // in general, we want tones to last forever, although
 // I may implement blinking later.
 const unsigned long INF_DURATION = 4294967295;
@@ -239,7 +281,7 @@ byte received_signal_raw_bytes[MAX_BUFFER_SIZE];
 // #define DEBUG 1
 
 #if (DEBUG > 0)
-Serial.println("Debug defined >0")
+Serial.println("Debug defined >0");
 #endif
 
 void setup_spi()
@@ -330,7 +372,7 @@ void updateFromSPI()
     int prevLevel = alarm((AlarmLevel)event.lvl, event.msg, &Serial);
     if (prevLevel != event.lvl)
     {
-      annunciateAlarmLevel(&Serial);
+      requestAlarmRefresh(&Serial);
     }
     else
     {
@@ -370,23 +412,23 @@ void encoderSwitchCallback(byte buttonEvent)
     // onLongPress is indidcated when you hold onto the button
   // more than longPressTime in milliseconds
   case onLongPress:
-    Serial.print("ENCODER_SWITCH Button Long Pressed For ");
-    Serial.print(longPressTime);
-    Serial.println("ms");
+    DBG_PRINT(F("ENCODER_SWITCH Button Long Pressed For "));
+    DBG_PRINT(longPressTime);
+    DBG_PRINTLN(F("ms"));
     break;
 
   // onMultiHit is indicated when you hit the button
   // multiHitTarget times within multihitTime in milliseconds
   case onMultiHit:
-    Serial.print("Encoder Switch Button Pressed ");
-    Serial.print(multiHitTarget);
-    Serial.print(" times in ");
-    Serial.print(multiHitTime);
-    Serial.println("ms");
+    DBG_PRINT(F("Encoder Switch Button Pressed "));
+    DBG_PRINT(multiHitTarget);
+    DBG_PRINT(F(" times in "));
+    DBG_PRINT(multiHitTime);
+    DBG_PRINTLN(F("ms"));
     break;
   default:
-    Serial.print("Encoder Switch buttonEvent but not reckognized case: ");
-    Serial.println(buttonEvent);
+    DBG_PRINT(F("Encoder Switch buttonEvent but not recognized case: "));
+    DBG_PRINTLN(buttonEvent);
     break;
   }
 }
@@ -412,9 +454,10 @@ void muteButtonCallback(byte buttonEvent)
       local_ptr_to_serial->print(F("Muted for "));
       local_ptr_to_serial->print(muteTimeoutMinutes);
       local_ptr_to_serial->println(F(" minute(s)."));
+      
     }
     start_of_song = millis();
-    annunciateAlarmLevel(local_ptr_to_serial);
+    requestAlarmRefresh(local_ptr_to_serial);
     printAlarmState(local_ptr_to_serial);
     break;
   case onRelease:
@@ -428,23 +471,23 @@ void muteButtonCallback(byte buttonEvent)
     // onLongPress is indidcated when you hold onto the button
   // more than longPressTime in milliseconds
   case onLongPress:
-    Serial.print("SWITCH_MUTE Long Pressed For ");
-    Serial.print(longPressTime);
-    Serial.println("ms");
+    DBG_PRINT(F("SWITCH_MUTE Long Pressed For "));
+    DBG_PRINT(longPressTime);
+    DBG_PRINTLN(F("ms"));
     break;
 
   // onMultiHit is indicated when you hit the button
   // multiHitTarget times within multihitTime in milliseconds
   case onMultiHit:
-    Serial.print("Button Pressed ");
-    Serial.print(multiHitTarget);
-    Serial.print(" times in ");
-    Serial.print(multiHitTime);
-    Serial.println("ms");
+    DBG_PRINT(F("Button Pressed "));
+    DBG_PRINT(multiHitTarget);
+    DBG_PRINT(F(" times in "));
+    DBG_PRINT(multiHitTime);
+    DBG_PRINTLN(F("ms"));
     break;
   default:
-    Serial.print("Mute buttonEvent but not reckognized case: ");
-    Serial.println(buttonEvent);
+    DBG_PRINT(F("Mute buttonEvent but not recognized case: "));
+    DBG_PRINTLN(buttonEvent);
     break;
   }
 }
@@ -536,6 +579,35 @@ void GPAD_HAL_setup(Stream *serialport, wifi_mode_t wifiMode, IPAddress &deviceI
 // the character buffer and returns an "abstract" command to be acted on
 // elseshere. This will allow us to remove the PubSubClient from the this file,
 // the Hardware Abstraction Layer.
+
+class CharBufferPrint : public Print
+{
+public:
+  CharBufferPrint(char *buffer, size_t capacity)
+      : _buffer(buffer), _capacity(capacity), _pos(0)
+  {
+    if (_capacity > 0) _buffer[0] = '\0';
+  }
+
+  size_t write(uint8_t ch) override
+  {
+    if (ch == '\0') return 1;
+
+    if (_pos + 1 < _capacity)
+    {
+      _buffer[_pos++] = (char)ch;
+      _buffer[_pos] = '\0';
+    }
+
+    return 1;
+  }
+
+private:
+  char *_buffer;
+  size_t _capacity;
+  size_t _pos;
+};
+
 void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *client)
 {
   if (buf == nullptr || serialport == nullptr || rlen < 1)
@@ -577,30 +649,54 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
   }
   case 'a':
   {
-    if (rlen < 2)
+    auto gpMessage = gpap_message::GPAPMessage::deserialize(buf, (size_t)rlen);
+
+    if (gpMessage.getMessageType() != gpap_message::MessageType::ALARM)
     {
+      serialport->println(F("GPAP alarm parse failed."));
       printError(serialport);
       return;
     }
 
-    int N = buf[1] - '0';
+    const auto &alarmMessage = gpMessage.getAlarmMessage();
+
+    strncpy(currentAlarmId, "", sizeof(currentAlarmId));
+    strncpy(currentAlarmType, "", sizeof(currentAlarmType));
+
+    CharBufferPrint idWriter(currentAlarmId, sizeof(currentAlarmId));
+    CharBufferPrint typeWriter(currentAlarmType, sizeof(currentAlarmType));
+
+    const auto &messageId = alarmMessage.getMessageId();
+    if (messageId.state == gpap_message::alarm::AlarmMessage::PossibleMessageId::State::Some)
+    {
+      messageId.contents.printTo(idWriter);
+    }
+
+    const auto &typeDesignator = alarmMessage.getTypeDesignator();
+    if (typeDesignator.state == gpap_message::alarm::AlarmMessage::PossibleTypeDesignator::State::Some)
+    {
+      typeDesignator.contents.printTo(typeWriter);
+    }
+    int N = static_cast<char>(alarmMessage.getAlarmLevel()) - '0';
+
     if (N < 0 || N >= NUM_LEVELS)
     {
+      serialport->println(F("Invalid GPAP alarm severity."));
       printError(serialport);
       return;
     }
 
     char msg[MAX_BUFFER_SIZE];
-    size_t copyLen = min((size_t)rlen, sizeof(msg) - 1);
-    memcpy(msg, buf, copyLen);
-    msg[copyLen] = '\0';
-    // This copy loooks uncessary, but is not...we want "alarm"
-    // to be a completely independent and abstract function.
-    // it should copy the msg buffer
-    serialport->print("The MQTT Alarm Message: ");
-    serialport->println(msg);
-    alarm((AlarmLevel)N, msg, serialport); // Makes Lamps indicate alarm.
+    CharBufferPrint msgWriter(msg, sizeof(msg));
+    alarmMessage.getAlarmContent().printTo(msgWriter);
 
+    serialport->print(F("GPAP Alarm Level: "));
+    serialport->println(N);
+
+    serialport->print(F("GPAP Alarm Content: "));
+    serialport->println(msg);
+
+    alarm((AlarmLevel)N, msg, serialport);
     break;
   }
   case 'i':
@@ -714,13 +810,83 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
 } // end interpretBuffer()
 
 // This has to be called periodically, at a minimum to handle the mute_button
+void showStatusLCD(AlarmLevel level, bool muted, char *msg);
+
 void muteTimeoutWatchdog(Stream *serialport)
 {
   // Watchdog for timed mute: when duration expires, force unmute and re-annunciate.
   if (isMuted() && serviceMuteTimeout())
   {
     serialport->println(F("Mute timeout expired. Auto-unmuting."));
-    annunciateAlarmLevel(serialport);
+    requestAlarmRefresh(serialport);
+  }
+}
+
+void serviceAlarmUiAudio(Stream *serialport)
+{
+  if (serialport == nullptr)
+  {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  static unsigned long lastDfPlayerPollMs = 0;
+  if (isDue(now, lastDfPlayerPollMs, DFPLAYER_POLL_INTERVAL_MS))
+  {
+    lastDfPlayerPollMs = now;
+    dfPlayerUpdate();
+  }
+
+  if (!alarmUiUpdatePending && !alarmAudioUpdatePending)
+  {
+    return;
+  }
+
+  // Leave the menu display in control while the user is navigating.  The latest
+  // alarm state remains pending and will be restored when the menu exits.
+  if (running_menu)
+  {
+    return;
+  }
+
+  const unsigned long settleMs = (alarmUiPendingRequestCount >= ALARM_UI_BURST_REQUEST_COUNT)
+                                     ? ALARM_UI_BURST_SETTLE_MS
+                                     : ALARM_UI_NORMAL_SETTLE_MS;
+  if ((now - lastAlarmUiRequestMs) < settleMs)
+  {
+    return;
+  }
+
+  if (alarmUiUpdatePending && isDue(now, lastAlarmUiUpdateMs, ALARM_UI_MIN_INTERVAL_MS))
+  {
+    alarmUiUpdatePending = false;
+    alarmUiPendingRequestCount = 0;
+    lastAlarmUiUpdateMs = now;
+    showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
+  }
+
+  if (alarmAudioUpdatePending && isDue(now, lastAlarmAudioUpdateMs, ALARM_AUDIO_MIN_INTERVAL_MS))
+  {
+    alarmAudioUpdatePending = false;
+    lastAlarmAudioUpdateMs = now;
+
+    const AlarmLevel audioLevel = pendingAlarmAudioLevel;
+
+    if (audioLevel <= 0)
+    {
+      serialport->println(F("Silent level: skipping DFPlayer playback."));
+    }
+    else if (currentlyMuted)
+    {
+      serialport->println(F("Muted: skipping DFPlayer playback."));
+    }
+    else
+    {
+      serialport->println(F("dfPlayer.play"));
+      serialport->println(audioLevel);
+      playNotBusyLevel(audioLevel);
+    }
   }
 }
 
@@ -733,6 +899,7 @@ void GPAD_HAL_loop()
 #endif
 
   muteTimeoutWatchdog(local_ptr_to_serial);
+  serviceAlarmUiAudio(local_ptr_to_serial);
 }
 
 /* Assumes LCD has been initilized
@@ -747,7 +914,7 @@ void clearLCD(void)
 }
 
 // Splash a message so we can tell the LCD is working
-void splashLCD(wifi_mode_t wifiMode, IPAddress &deviceIp)
+void splashLCD(wifi_mode_t wifiMode, const IPAddress &deviceIp)
 {
   lcd.init(); // initialize the lcd
   // Print a message to the LCD.
@@ -932,39 +1099,38 @@ void unchanged_anunicateAlarmLevel(Stream *serialport)
 }
 void restoreAlarmLevel(Stream *serialport)
 {
-  showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
-}
-
-void annunciateAlarmLevel(Stream *serialport)
-{
-  static unsigned long lastAnnunciateMs = 0;
-  const unsigned long now = millis();
-
   if (serialport == nullptr)
   {
     return;
   }
 
-  // Avoid long back-to-back UI/audio work under message bursts.
-  if ((now - lastAnnunciateMs) < 50)
+  markAlarmUiAudioPending(false);
+}
+
+void requestAlarmRefresh(Stream *serialport, bool includeAudio)
+{
+  if (serialport == nullptr)
   {
-    unchanged_anunicateAlarmLevel(serialport);
     return;
   }
-  lastAnnunciateMs = now;
 
   start_of_song = millis();
-  unchanged_anunicateAlarmLevel(serialport);
-  showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
-  // here is the new call
-  serialport->println("dfPlayer.play");
-  serialport->println(currentLevel);
-  if (!currentlyMuted)
+  markAlarmUiAudioPending(includeAudio);
+}
+
+void annunciateAlarmLevel(Stream *serialport)
+{
+  if (serialport == nullptr)
   {
-    playNotBusyLevel(currentLevel);
+    return;
   }
 
-  yield();
+  // Keep the immediate work cheap so MQTT callbacks and serial/SPI handlers can
+  // return quickly.  LCD redraw and DFPlayer commands are coalesced in
+  // serviceAlarmUiAudio(), which is run later from GPAD_HAL_loop().
+  start_of_song = millis();
+  unchanged_anunicateAlarmLevel(serialport);
+  markAlarmUiAudioPending();
 }
 
 GPAD_API::GPAD_API(SemanticVersion version)

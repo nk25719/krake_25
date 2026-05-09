@@ -11,7 +11,7 @@ const int nDFPlayer_BUSY = 4; // active LOW BUSY pin from DFPlayer
 bool isDFPlayerDetected = false;
 int volumeDFPlayer = 20; // Range: 1 to 30
 int numberFilesDF = 0;   // Number of audio files found on SD card
-
+extern bool currentlyMuted;
 char command;
 int pausa = 0;
 
@@ -110,13 +110,26 @@ void checkSerial(void)
   }
 }
 
+namespace
+{
+void delayWithYield(const unsigned long durationMs)
+{
+  const unsigned long startMs = millis();
+  while ((millis() - startMs) < durationMs)
+  {
+    delay(10);
+    yield();
+  }
+}
+}
+
 void setupDFPlayer()
 {
   pinMode(nDFPlayer_BUSY, INPUT_PULLUP);
 
   Serial.println("UART2 Begin for DFPlayer");
   mySerial1.begin(BAUD_DFPLAYER, SERIAL_8N1, RXD2, TXD2);
-  delay(1000);
+  delayWithYield(1000);
 
   // ACK=false is safer for DFPlayer clones and avoids repeated blocking/timeouts.
   Serial.println("Begin DFPlayer: ACK=false, doReset=false");
@@ -132,7 +145,7 @@ void setupDFPlayer()
   Serial.println("DFPlayer Mini detected.");
 
   dfPlayer.setTimeOut(500);
-  delay(300);
+  delayWithYield(300);
 
   // This may return unusual values on clones. Do not disable audio only because of this.
   int moduleState = dfPlayer.readState();
@@ -144,7 +157,7 @@ void setupDFPlayer()
   }
 
   dfPlayer.volume(volumeDFPlayer);
-  delay(300);
+  delayWithYield(300);
 
   numberFilesDF = dfPlayer.readFileCounts();
   Serial.print("SD card file count: ");
@@ -157,7 +170,7 @@ void setupDFPlayer()
 
   Serial.println("DFPlayer startup test: playing track 1.");
   dfPlayer.play(1);
-  delay(3000); // Give enough time to hear output. Do not immediately stop.
+  delayWithYield(3000); // Give enough time to hear output without starving the scheduler/WDT.
 
   displayDFPlayerStats();
   menu_opcoes();
@@ -304,6 +317,18 @@ void playNotBusyLevel(int level)
 {
   if (!isDFPlayerDetected) return;
 
+  if (currentlyMuted)
+  {
+    Serial.println("Muted: skipping DFPlayer playback.");
+    return;
+  }
+
+     if (level <= 0)
+  {
+    Serial.println("Silent level: skipping DFPlayer playback.");
+    return;
+  }
+
   Serial.println("playNotBusyLevel");
   if (digitalRead(nDFPlayer_BUSY) == HIGH)
   {
@@ -319,11 +344,20 @@ void playNotBusyLevel(int level)
   {
     printDetail(dfPlayer.readType(), dfPlayer.read());
   }
+
+  if (!isDFPlayerDetected) return;
+
 }
 
 bool playAlarmLevel(int alarmNumberToPlay)
 {
   if (!isDFPlayerDetected) return false;
+
+  if (currentlyMuted)
+  {
+    Serial.println("Muted: skipping alarm playback.");
+    return false;
+  }
 
   static unsigned long timer = 0;
   const unsigned long delayPlayLevel = 100;

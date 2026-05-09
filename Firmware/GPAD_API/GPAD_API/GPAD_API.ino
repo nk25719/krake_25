@@ -71,39 +71,45 @@
 #include "WiFiManagerOTA.h"
 #include <ESPAsyncWebServer.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
 
 #include "InterruptRotator.h"
 
 #include "DFPlayer.h"
 #include "GPAD_menu.h"
+#include "mqtt_handler.h"
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
 const size_t SERIAL_LOG_MAX_CHARS = 12000;
-String serialLogBuffer;
+char serialLogBuffer[SERIAL_LOG_MAX_CHARS + 1];
+size_t serialLogLength = 0;
 
 void appendSerialLog(const char *text, size_t len)
 {
-  if (len == 0)
+  if (text == nullptr || len == 0)
   {
     return;
   }
 
-  if (len > SERIAL_LOG_MAX_CHARS)
+  if (len >= SERIAL_LOG_MAX_CHARS)
   {
     text += (len - SERIAL_LOG_MAX_CHARS);
     len = SERIAL_LOG_MAX_CHARS;
+    serialLogLength = 0;
+  }
+  else if ((serialLogLength + len) > SERIAL_LOG_MAX_CHARS)
+  {
+    const size_t overflow = (serialLogLength + len) - SERIAL_LOG_MAX_CHARS;
+    memmove(serialLogBuffer, serialLogBuffer + overflow, serialLogLength - overflow);
+    serialLogLength -= overflow;
   }
 
-  for (size_t i = 0; i < len; ++i)
-  {
-    serialLogBuffer += text[i];
-  }
-  if (serialLogBuffer.length() > SERIAL_LOG_MAX_CHARS)
-  {
-    serialLogBuffer.remove(0, serialLogBuffer.length() - SERIAL_LOG_MAX_CHARS);
-  }
+  memcpy(serialLogBuffer + serialLogLength, text, len);
+  serialLogLength += len;
+  serialLogBuffer[serialLogLength] = '\0';
 }
 
 class SerialMirrorStream : public Stream
@@ -176,21 +182,12 @@ WifiOTA::Manager wifiManager(WiFi, debugSerial);
 
 #define DEBUG_SPI 0
 
-// #define DEBUG 0
-#define DEBUG 1
+#define DEBUG 0
 // #define DEBUG 4
 
-unsigned long last_command_ms;
-
-// We have currently defined our alam time to include 10-second "songs",
-// So we will not process a new alarm condition until we have completed one song.
-const unsigned long DELAY_BEFORE_NEW_COMMAND_ALLOWED = 10000;
-const unsigned int NUM_WIFI_RECONNECT_RETRIES = 3;
-
-const int LED_PINS[] = {LIGHT0, LIGHT1, LIGHT2, LIGHT3, LIGHT4};
-// const int SWITCH_PINS[] = { SW1, SW2, SW3, SW4 };  // SW1, SW2, SW3, SW4
-const int LED_COUNT = sizeof(LED_PINS) / sizeof(LED_PINS[0]);
-// const int SWITCH_COUNT = sizeof(SWITCH_PINS) / sizeof(SWITCH_PINS[0]);
+#ifndef ENABLE_HEAP_DIAGNOSTICS
+#define ENABLE_HEAP_DIAGNOSTICS 0
+#endif
 
 // MQTT Broker
 // #define USE_HIVEMQ
@@ -217,10 +214,15 @@ char publish_Default_Topic[MAX_TOPIC_LEN] = {0};
 const size_t DEVICE_ROLE_MAX_LEN = 12;
 char device_role[DEVICE_ROLE_MAX_LEN] = "Krake";
 const char *STATUS_DISCOVERY_TOPIC = "#";
+const bool MQTT_DISCOVERY_SUBSCRIBE_ALL = false;
 const uint8_t MAX_WATCH_TOPICS = 12;
 char watchedTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
 uint8_t watchedTopicCount = 0;
 unsigned long wifiResetRequestedAtMs = 0;
+const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
+const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 2;
+unsigned long lastMqttReconnectAttemptMs = 0;
+bool mqttReconnectRequested = false;
 
 const uint8_t MAX_TRACKED_KRAKES = 16;
 const unsigned long KRAKE_ONLINE_TIMEOUT_MS = 30000;
@@ -323,6 +325,11 @@ void serialSplash()
 // A periodic message identifying the subscriber (Krake) is on line.
 void publishOnLineMsg(void)
 {
+  if (!client.connected())
+  {
+    return;
+  }
+
   const unsigned long MESSAGE_PERIOD = 10000;
   static unsigned long lastMillis = 0; // Sets timing for periodic MQTT publish message
   // publish a message roughly every second.
@@ -339,9 +346,9 @@ void publishOnLineMsg(void)
 #endif
 
     dtostrf(rssi, 1, 2, rssiString);
-    char onLineMsg[32] = " online, RSSI:";
-    strcat(onLineMsg, rssiString);
-    client.publish(publish_Ack_Topic, onLineMsg, true);
+    char onLineMsg[32];
+    snprintf(onLineMsg, sizeof(onLineMsg), " online, RSSI:%s", rssiString);
+    queueMqtt(publish_Ack_Topic, onLineMsg, true);
 
     // This should be moved to a place after the WiFi connect success
     //  debugSerial.print("Device connected at IPaddress: "); //FLE
@@ -353,44 +360,77 @@ void publishOnLineMsg(void)
   }
 }
 
-// TODO: have this return a success or failure status and move
-// the delay up.
-void reconnect()
+void requestMqttReconnect()
 {
-  int n = 0;
-  const String clientId = String(COMPANY_NAME) + "-" + String(macAddressString);
-  const String willPayload = String(device_role) + " offline";
-  while (!client.connected() && n < NUM_WIFI_RECONNECT_RETRIES)
+  mqttReconnectRequested = true;
+  lastMqttReconnectAttemptMs = 0;
+  if (client.connected())
   {
-    n++;
-    debugSerial.print("Attempting MQTT connection at: ");
-    debugSerial.print(millis());
-    debugSerial.print("..... ");
-    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload.c_str()))
-    {
-      debugSerial.print("success at: ");
-      debugSerial.println(millis());
-      String onlinePayload = String(device_role) + " online";
-      client.publish(publish_Ack_Topic, onlinePayload.c_str(), true);
-      client.subscribe(subscribe_Alarm_Topic); // Subscribe to GPAD API alarms
-      client.subscribe(STATUS_DISCOVERY_TOPIC);
-      for (uint8_t i = 0; i < subscribe_Extra_Topic_Count; i++)
-      {
-        client.subscribe(subscribe_Extra_Topics[i]);
-      }
-      for (uint8_t i = 0; i < watchedTopicCount; i++)
-      {
-        client.subscribe(watchedTopics[i]);
-      }
-    }
-    else
-    {
-      debugSerial.print("failed, rc=");
-      debugSerial.println(client.state());
-      delay(1000);
-    }
+    client.disconnect();
   }
-  debugSerial.println((client.connected()) ? "connected!" : "failed to reconnect!");
+}
+
+bool reconnect(bool force = false)
+{
+  if (client.connected())
+  {
+    mqttReconnectRequested = false;
+    return true;
+  }
+
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    return false;
+  }
+
+  const unsigned long now = millis();
+  if (!force && lastMqttReconnectAttemptMs != 0 && (now - lastMqttReconnectAttemptMs) < MQTT_RECONNECT_INTERVAL_MS)
+  {
+    return false;
+  }
+  lastMqttReconnectAttemptMs = now;
+  mqttReconnectRequested = false;
+
+  char clientId[sizeof(COMPANY_NAME) + MAC_ADDRESS_STRING_LENGTH + 1];
+  snprintf(clientId, sizeof(clientId), "%s-%s", COMPANY_NAME, macAddressString);
+  char willPayload[DEVICE_ROLE_MAX_LEN + 9];
+  snprintf(willPayload, sizeof(willPayload), "%s offline", device_role);
+#if (DEBUG > 0)
+  debugSerial.print("Attempting MQTT connection at: ");
+  debugSerial.print(millis());
+  debugSerial.print("..... ");
+#endif
+  if (client.connect(clientId, mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload))
+  {
+#if (DEBUG > 0)
+    debugSerial.print("success at: ");
+    debugSerial.println(millis());
+#endif
+    char onlinePayload[DEVICE_ROLE_MAX_LEN + 8];
+    snprintf(onlinePayload, sizeof(onlinePayload), "%s online", device_role);
+    queueMqtt(publish_Ack_Topic, onlinePayload, true);
+    client.subscribe(subscribe_Alarm_Topic); // Subscribe to GPAD API alarms
+    if (MQTT_DISCOVERY_SUBSCRIBE_ALL)
+    {
+      client.subscribe(STATUS_DISCOVERY_TOPIC);
+    }
+    for (uint8_t i = 0; i < subscribe_Extra_Topic_Count; i++)
+    {
+      client.subscribe(subscribe_Extra_Topics[i]);
+    }
+    for (uint8_t i = 0; i < watchedTopicCount; i++)
+    {
+      client.subscribe(watchedTopics[i]);
+    }
+    return true;
+  }
+
+#if (DEBUG > 0)
+  debugSerial.print("failed, rc=");
+  debugSerial.println(client.state());
+#endif
+  yield();
+  return false;
 }
 
 bool isManagedSubscribedTopic(const char *topic)
@@ -449,9 +489,9 @@ void clearTrackedKrakes()
   }
 }
 
-int indexForKrake(const String &krakeId)
+int indexForKrake(const char *krakeId)
 {
-  if (krakeId.length() == 0)
+  if (krakeId == nullptr || krakeId[0] == '\0')
   {
     return -1;
   }
@@ -459,7 +499,7 @@ int indexForKrake(const String &krakeId)
   int freeSlot = -1;
   for (uint8_t i = 0; i < MAX_TRACKED_KRAKES; i++)
   {
-    if (trackedKrakes[i].inUse && krakeId.equalsIgnoreCase(trackedKrakes[i].id))
+    if (trackedKrakes[i].inUse && strcasecmp(krakeId, trackedKrakes[i].id) == 0)
     {
       return i;
     }
@@ -472,39 +512,86 @@ int indexForKrake(const String &krakeId)
   if (freeSlot >= 0)
   {
     trackedKrakes[freeSlot].inUse = true;
-    krakeId.toCharArray(trackedKrakes[freeSlot].id, sizeof(trackedKrakes[freeSlot].id));
+    strncpy(trackedKrakes[freeSlot].id, krakeId, sizeof(trackedKrakes[freeSlot].id) - 1);
+    trackedKrakes[freeSlot].id[sizeof(trackedKrakes[freeSlot].id) - 1] = '\0';
     return freeSlot;
   }
 
   return -1;
 }
 
-String extractKrakeIdFromAckTopic(const char *topic)
+void uppercaseAscii(char *value)
 {
-  String id(topic);
-  id.toUpperCase();
-  if (id.endsWith("_ACK"))
+  if (value == nullptr)
   {
-    id.remove(id.length() - 4);
+    return;
   }
-  return id;
+  for (size_t i = 0; value[i] != '\0'; i++)
+  {
+    if (value[i] >= 'a' && value[i] <= 'z')
+    {
+      value[i] = value[i] - ('a' - 'A');
+    }
+  }
 }
 
-int parseRssiFromStatus(const String &status)
+void trimTrailingSpaces(char *value)
 {
-  const int marker = status.indexOf("RSSI:");
-  if (marker < 0)
+  if (value == nullptr)
+  {
+    return;
+  }
+  size_t len = strlen(value);
+  while (len > 0 && isspace((unsigned char)value[len - 1]))
+  {
+    value[--len] = '\0';
+  }
+}
+
+void extractKrakeIdFromAckTopic(const char *topic, char *dest, size_t destLen)
+{
+  if (destLen == 0)
+  {
+    return;
+  }
+  dest[0] = '\0';
+  if (topic == nullptr)
+  {
+    return;
+  }
+  strncpy(dest, topic, destLen - 1);
+  dest[destLen - 1] = '\0';
+  uppercaseAscii(dest);
+  const size_t len = strlen(dest);
+  if (len >= 4 && strcmp(dest + len - 4, "_ACK") == 0)
+  {
+    dest[len - 4] = '\0';
+  }
+}
+
+int parseRssiFromStatus(const char *status)
+{
+  if (status == nullptr)
   {
     return 0;
   }
-  String rssiPart = status.substring(marker + 5);
-  rssiPart.trim();
-  return rssiPart.toInt();
+  const char *marker = strstr(status, "RSSI:");
+  if (marker == nullptr)
+  {
+    return 0;
+  }
+  marker += 5;
+  while (*marker != '\0' && isspace((unsigned char)*marker))
+  {
+    marker++;
+  }
+  return atoi(marker);
 }
 
-void updateKrakeStatusFromAck(const char *topic, const String &statusMsg)
+void updateKrakeStatusFromAck(const char *topic, const char *statusMsg)
 {
-  const String krakeId = extractKrakeIdFromAckTopic(topic);
+  char krakeId[sizeof(trackedKrakes[0].id)];
+  extractKrakeIdFromAckTopic(topic, krakeId, sizeof(krakeId));
   const int idx = indexForKrake(krakeId);
   if (idx < 0)
   {
@@ -514,7 +601,7 @@ void updateKrakeStatusFromAck(const char *topic, const String &statusMsg)
   trackedKrakes[idx].lastSeenMs = millis();
   trackedKrakes[idx].lastStatusMs = millis();
   trackedKrakes[idx].rssi = parseRssiFromStatus(statusMsg);
-  strncpy(trackedKrakes[idx].status, statusMsg.c_str(), sizeof(trackedKrakes[idx].status) - 1);
+  strncpy(trackedKrakes[idx].status, statusMsg != nullptr ? statusMsg : "", sizeof(trackedKrakes[idx].status) - 1);
   trackedKrakes[idx].status[sizeof(trackedKrakes[idx].status) - 1] = '\0';
   strncpy(trackedKrakes[idx].lastTopic, topic, sizeof(trackedKrakes[idx].lastTopic) - 1);
   trackedKrakes[idx].lastTopic[sizeof(trackedKrakes[idx].lastTopic) - 1] = '\0';
@@ -532,22 +619,26 @@ bool isWatchedTopic(const char *topic)
   return false;
 }
 
-String extractKrakeIdFromTopic(const char *topic)
+void extractKrakeIdFromTopic(const char *topic, char *dest, size_t destLen)
 {
-  String id = String(topic);
-  const int slash = id.indexOf('/');
-  if (slash > 0)
+  if (destLen == 0)
   {
-    id = id.substring(0, slash);
+    return;
   }
-  const int underscore = id.indexOf('_');
-  if (underscore > 0)
+  dest[0] = '\0';
+  if (topic == nullptr)
   {
-    id = id.substring(0, underscore);
+    return;
   }
-  id.trim();
-  id.toUpperCase();
-  return id;
+  size_t len = 0;
+  while (topic[len] != '\0' && topic[len] != '/' && topic[len] != '_' && len < (destLen - 1))
+  {
+    dest[len] = topic[len];
+    len++;
+  }
+  dest[len] = '\0';
+  trimTrailingSpaces(dest);
+  uppercaseAscii(dest);
 }
 
 void markWatchedTopicParticipant(const char *topic)
@@ -557,8 +648,9 @@ void markWatchedTopicParticipant(const char *topic)
     return;
   }
 
-  String krakeId = extractKrakeIdFromTopic(topic);
-  if (krakeId.length() == 0)
+  char krakeId[sizeof(trackedKrakes[0].id)];
+  extractKrakeIdFromTopic(topic, krakeId, sizeof(krakeId));
+  if (krakeId[0] == '\0')
   {
     return;
   }
@@ -682,7 +774,7 @@ void clearExtraTopics()
   }
 }
 
-void parseAndSetExtraTopics(const String &rawTopics)
+bool parseAndSetExtraTopics(const String &rawTopics)
 {
   clearExtraTopics();
   String token = "";
@@ -694,14 +786,23 @@ void parseAndSetExtraTopics(const String &rawTopics)
       token.trim();
       if (token.length() > 0 && subscribe_Extra_Topic_Count < MAX_EXTRA_TOPICS)
       {
+        if (token.length() >= MAX_TOPIC_LEN)
+        {
+          return false;
+        }
         token.toCharArray(subscribe_Extra_Topics[subscribe_Extra_Topic_Count], MAX_TOPIC_LEN);
         subscribe_Extra_Topic_Count++;
+      }
+      else if (token.length() > 0)
+      {
+        return false;
       }
       token = "";
       continue;
     }
     token += c;
   }
+  return true;
 }
 
 String joinedExtraTopics()
@@ -1001,11 +1102,8 @@ bool applyBrokerSetting(const String &broker)
 
   broker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
   client.setServer(mqtt_broker_name, 1883);
-  if (client.connected())
-  {
-    client.disconnect();
-  }
-  reconnect();
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+  requestMqttReconnect();
   writeMqttConfig();
   return true;
 }
@@ -1037,13 +1135,11 @@ bool applyPrimaryTopicSetting(const String &rawTopic, char *destTopic, size_t de
 
 void applyExtraTopicsSetting(const String &topics)
 {
-  parseAndSetExtraTopics(topics);
-  if (client.connected())
+  if (parseAndSetExtraTopics(topics))
   {
-    client.disconnect();
+    requestMqttReconnect();
+    writeMqttConfig();
   }
-  reconnect();
-  writeMqttConfig();
 }
 // Function to turn on all lamps
 void turnOnAllLamps()
@@ -1072,7 +1168,6 @@ void turnOffAllLamps()
 // Handeler for MQTT subscribed messages
 void callback(char *topic, byte *payload, unsigned int length)
 {
-  // todo, remove use of String here....
   // Note: We will check for topic or topics in the future...
   if (isManagedSubscribedTopic(topic))
   {
@@ -1089,26 +1184,25 @@ void callback(char *topic, byte *payload, unsigned int length)
 
     if (!ackTopic)
     {
+#if (DEBUG > 0)
       debugSerial.print("Topic arrived [");
       debugSerial.print(topic);
       debugSerial.print("] ");
-#if (DEBUG > 0)
       debugSerial.print("|");
       debugSerial.print(mbuff);
       debugSerial.println("|");
-#endif
       debugSerial.println("Received MQTT Msg.");
+#endif
     }
 
-    const String payloadText = String(mbuff);
     if (ackTopic)
     {
-      updateKrakeStatusFromAck(topic, payloadText);
+      updateKrakeStatusFromAck(topic, mbuff);
       return;
     }
     markWatchedTopicParticipant(topic);
     interpretBuffer(mbuff, m, &debugSerial, &client); // Process the MQTT message
-    annunciateAlarmLevel(&debugSerial);
+    requestAlarmRefresh(&debugSerial);
   }
 } // end call back
 
@@ -1367,6 +1461,7 @@ void setupOTA()
                 {
                   broker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
                   client.setServer(mqtt_broker_name, 1883);
+                  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
                 }
               }
 
@@ -1397,7 +1492,7 @@ void setupOTA()
               if (request->hasParam("subscribeTopics", true))
               {
                 String topics = request->getParam("subscribeTopics", true)->value();
-                parseAndSetExtraTopics(topics);
+                if (!parseAndSetExtraTopics(topics))
                 {
                   errorMessage += "invalid subscribeTopics;";
                 }
@@ -1439,11 +1534,7 @@ void setupOTA()
               }
 
               writeMqttConfig();
-              if (client.connected())
-              {
-                client.disconnect();
-              }
-              reconnect();
+              requestMqttReconnect();
               request->send(200, "text/plain", "config updated"); });
 
   server.on("/settings/mute", HTTP_POST, [](AsyncWebServerRequest *request)
@@ -1572,7 +1663,7 @@ void setupOTA()
                 request->send(403, "text/plain", "topic not allowed; use saved broker-console publish topics");
                 return;
               }
-              bool ok = client.publish(topic.c_str(), payload.c_str());
+              bool ok = queueMqtt(topic.c_str(), payload.c_str());
               if (ok && topic.length() < MAX_TOPIC_LEN)
               {
                 topic.toCharArray(publish_Default_Topic, MAX_TOPIC_LEN);
@@ -1610,9 +1701,12 @@ void setup()
   // Serial setup
   delay(100);
   debugSerial.begin(BAUDRATE);
-  while (!debugSerial)
+  serialLogBuffer[0] = '\0';
+  serialLogLength = 0;
+  const unsigned long serialStartMs = millis();
+  while (!debugSerial && (millis() - serialStartMs) < 2000)
   {
-    ; // wait for serial port to connect. Needed for native USB
+    delay(10); // wait briefly for native USB without starving the scheduler
   }
   serialSplash();
   // We call this a second time to get the MAC on the screen
@@ -1664,6 +1758,7 @@ void setup()
   clearTrackedKrakes();
   clearWatchedTopics();
   client.setServer(mqtt_broker_name, 1883); // Default MQTT port, this is a TCP port.
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
   client.setCallback(callback);
 
 #if (DEBUG > 0)
@@ -1707,6 +1802,7 @@ void setup()
 
   loadMqttConfig();
   client.setServer(mqtt_broker_name, 1883);
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
 
 #if (DEBUG > 1)
   debugSerial.println("XXXXXXX");
@@ -1729,7 +1825,7 @@ void setup()
   {
     if (!client.connected())
     {
-      reconnect();
+      reconnect(true);
     }
 
     clearLCD();
@@ -1753,20 +1849,19 @@ void setup()
 
   debugSerial.println(F("initLiffleFS"));
 
-  server.begin(); // Start server web socket to render pages
-  
-  debugSerial.println(F("iStart server web socket to render pages"));
+  setupOTA();
+  debugSerial.println(F("setupOTA"));
 
   ElegantOTA.begin(&server);
   debugSerial.println(F("ElegantOTA.begin"));
 
-  setupOTA();
-  debugSerial.println(F("setupOTA"));
+  server.begin(); // Start server web socket to render pages
+  debugSerial.println(F("Start server web socket to render pages"));
 
 
   initRotator();
   debugSerial.println(F("initRotator"));
-  splashLCD(wifiManager.getMode(), deviceAddress);
+  splashLCD(wifiManager.getMode(), wifiManager.getAddress());
 
   debugSerial.println(F("splashLCD"));
 
@@ -1783,32 +1878,36 @@ void setup()
   digitalWrite(LED_BUILTIN, LOW); // turn the LED off at end of setup
 } // end of setup()
 
-unsigned long last_ms = 0;
-void toggle(int pin)
-{
-  digitalWrite(pin, digitalRead(pin) ? LOW : HIGH);
-}
-
-const unsigned long LOW_FREQ_DEBUG_MS = 20000;
-unsigned long time_since_LOW_FREQ_ms = 0;
-
-int cnt_actions = 0;
-
 bool running_menu = false;
 bool menu_just_exited = false;
 
-void loop()
+void serviceMqttClient()
 {
 #if defined HMWK || defined KRAKE
-
-  if (!client.loop())
+  if (client.connected())
   {
-    debugSerial.print(mqtt_broker_name);
-    debugSerial.print(" lost MQTT at: ");
-    debugSerial.println(millis());
-    reconnect();
+    if (!client.loop())
+    {
+#if (DEBUG > 0)
+      debugSerial.print(mqtt_broker_name);
+      debugSerial.print(" lost MQTT at: ");
+      debugSerial.println(millis());
+#endif
+      requestMqttReconnect();
+    }
+    serviceMqttQueue(&client);
   }
+  else if (mqttReconnectRequested || WiFi.status() == WL_CONNECTED)
+  {
+    reconnect();
+    serviceMqttQueue(&client);
+  }
+#endif
+}
 
+void serviceDeferredReset()
+{
+#if defined HMWK || defined KRAKE
   if (wifiResetRequestedAtMs != 0 && (millis() - wifiResetRequestedAtMs) > 750)
   {
     debugSerial.println(F("Resetting WiFi credentials and restarting."));
@@ -1821,25 +1920,52 @@ void loop()
     delay(150);
     ESP.restart();
   }
-
-  publishOnLineMsg();
-  wink(); // The builtin LED
 #endif
+}
 
+void serviceHeapDiagnostics()
+{
+#if ENABLE_HEAP_DIAGNOSTICS
+  static unsigned long lastHeapDiagnosticMs = 0;
+  const unsigned long HEAP_DIAGNOSTIC_INTERVAL_MS = 30000;
+  const unsigned long now = millis();
+  if (lastHeapDiagnosticMs == 0 || (now - lastHeapDiagnosticMs) >= HEAP_DIAGNOSTIC_INTERVAL_MS)
+  {
+    lastHeapDiagnosticMs = now;
+    debugSerial.print(F("Free heap: "));
+    debugSerial.print(ESP.getFreeHeap());
+    debugSerial.print(F(" max alloc: "));
+    debugSerial.println(ESP.getMaxAllocHeap());
+  }
+#endif
+}
+
+void loop()
+{
+  // MQTT gets the first and most frequent slices so inbound bursts are drained
+  // before comparatively slow LCD/menu/audio work is serviced.
+  serviceMqttClient();
+  serviceDeferredReset();
+
+  // Hardware/UI runs after MQTT.  LCD redraws and DFPlayer commands are
+  // scheduled/throttled inside GPAD_HAL_loop() so this remains a short slice.
   unchanged_anunicateAlarmLevel(&debugSerial);
-  // delay(20);
   GPAD_HAL_loop();
+  serviceMqttClient();
 
   processSerial(&debugSerial, &debugSerial, &client);
+  serviceMqttClient();
 
   // Here we also process the UART1 using the same routine.
   processSerial(&debugSerial, &uartSerial1, &client);
+  serviceMqttClient();
 
   // Here we will listen for an SPI command...
 
   // // Now try to read from the SPI Port!
 #if defined(GPAD)
   updateFromSPI();
+  serviceMqttClient();
 #endif
 
   updateRotator();
@@ -1855,10 +1981,15 @@ void loop()
   {
     lcd.backlight();
     poll_GPAD_menu();
+    serviceMqttClient();
   }
 
-  // if ((millis() / 10000) > cnt_actions) {
-  //   cnt_actions++;
-  //   navigate_to_n_and_execute(cnt_actions % 3);
-  // }
+#if defined HMWK || defined KRAKE
+  publishOnLineMsg();
+  serviceHeapDiagnostics();
+  wink(); // The builtin LED
+#endif
+
+  serviceMqttClient();
+  yield();
 }

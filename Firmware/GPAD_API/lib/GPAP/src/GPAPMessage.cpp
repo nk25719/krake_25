@@ -21,23 +21,20 @@
 using namespace gpap_message;
 GPAPMessage GPAPMessage::deserialize(const char *const buffer, const std::size_t numBytes)
 {
-    // Can't determined the message type if there are no bytes
-    if (numBytes == 0)
+    if (buffer == nullptr || numBytes == 0)
     {
-        throw;
+        return GPAPMessage::invalid();
     }
 
-    // TODO: This should be wrapped in a try/catch if there isn't a 0th element
     const auto messageType = static_cast<MessageType>(buffer[0]);
 
     switch (messageType)
     {
     case MessageType::ALARM:
-        if ((numBytes - 1) == 0)
+        if (!deserialize::AlarmMessageBuilder::isValidAlarmMessage(buffer + 1, numBytes - 1))
         {
-            throw;
+            return GPAPMessage::invalid();
         }
-
         return GPAPMessage(std::move(deserialize::AlarmMessageBuilder::buildAlarmMessage(buffer + 1, numBytes - 1)));
 
     case MessageType::INFO:
@@ -53,7 +50,7 @@ GPAPMessage GPAPMessage::deserialize(const char *const buffer, const std::size_t
         return GPAPMessage(HelpMessage());
 
     default:
-        throw;
+        return GPAPMessage::invalid();
     }
 }
 
@@ -64,11 +61,5 @@ MessageType GPAPMessage::getMessageType() const noexcept
 
 const alarm::AlarmMessage &GPAPMessage::getAlarmMessage() const
 {
-    // Cannot access a field of the union when it's the incorrect type
-    if (this->messageType != MessageType::ALARM)
-    {
-        throw;
-    }
-
     return this->alarm;
 }

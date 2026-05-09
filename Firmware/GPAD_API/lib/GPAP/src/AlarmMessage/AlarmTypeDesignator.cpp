@@ -31,8 +31,6 @@ using namespace gpap_message::alarm;
 
 AlarmTypeDesignator::AlarmTypeDesignator(const Buffer designator) : designator(std::move(designator))
 {
-    auto designatorIterator = designator.begin();
-
     const bool allDigits =
         std::all_of(this->designator.cbegin(), this->designator.cend(),
                     [](char inputCharacter)
@@ -40,10 +38,11 @@ AlarmTypeDesignator::AlarmTypeDesignator(const Buffer designator) : designator(s
                         return std::isdigit(static_cast<unsigned char>(inputCharacter));
                     });
 
-    // if the characters are not all digits we want to throw
+    // Invalid characters leave the object printable but neutral; validation rejects
+    // malformed GPAP messages before construction on embedded builds.
     if (!allDigits)
     {
-        throw;
+        this->designator.fill('0');
     }
 }
 

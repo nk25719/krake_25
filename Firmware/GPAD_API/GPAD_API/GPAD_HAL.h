@@ -305,10 +305,12 @@ void receive_byte(byte c);
 void updateFromSPI();
 
 void restoreAlarmLevel(Stream *serialport);
+void requestAlarmRefresh(Stream *serialport, bool includeAudio = true);
 void unchanged_anunicateAlarmLevel(Stream *serialport);
 void annunciateAlarmLevel(Stream *serialport);
+void serviceAlarmUiAudio(Stream *serialport);
 void clearLCD(void);
-void splashLCD(wifi_mode_t wifiMode, IPAddress &deviceIp);
+void splashLCD(wifi_mode_t wifiMode, const IPAddress &deviceIp);
 
 void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *client);
 
