@@ -807,6 +807,8 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
 } // end interpretBuffer()
 
 // This has to be called periodically, at a minimum to handle the mute_button
+void showStatusLCD(AlarmLevel level, bool muted, char *msg);
+
 void muteTimeoutWatchdog(Stream *serialport)
 {
   // Watchdog for timed mute: when duration expires, force unmute and re-annunciate.
