@@ -168,6 +168,7 @@ extern AlarmLevel currentLevel;
 extern bool currentlyMuted;
 extern char AlarmMessageBuffer[81];
 extern unsigned long muteTimeoutEndMillis;
+extern bool running_menu;
 
 extern char macAddressString[13];
 extern int muteTimeoutMinutes;
@@ -216,6 +217,42 @@ const int LIGHT_LEVEL[][NUM_NOTES] = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 const unsigned LEN_OF_NOTE_MS = 500;
 
 unsigned long start_of_song = 0;
+
+namespace
+{
+  const unsigned long ALARM_UI_MIN_INTERVAL_MS = 250;
+  const unsigned long ALARM_AUDIO_MIN_INTERVAL_MS = 250;
+  const unsigned long ALARM_UI_NORMAL_SETTLE_MS = 25;
+  const unsigned long ALARM_UI_BURST_SETTLE_MS = 150;
+  const unsigned long DFPLAYER_POLL_INTERVAL_MS = 100;
+  const uint8_t ALARM_UI_BURST_REQUEST_COUNT = 3;
+
+  bool alarmUiUpdatePending = false;
+  bool alarmAudioUpdatePending = false;
+  unsigned long lastAlarmUiRequestMs = 0;
+  unsigned long lastAlarmUiUpdateMs = 0;
+  unsigned long lastAlarmAudioUpdateMs = 0;
+  uint8_t alarmUiPendingRequestCount = 0;
+
+  void markAlarmUiAudioPending(bool includeAudio = true)
+  {
+    alarmUiUpdatePending = true;
+    if (includeAudio)
+    {
+      alarmAudioUpdatePending = true;
+    }
+    lastAlarmUiRequestMs = millis();
+    if (alarmUiPendingRequestCount < 255)
+    {
+      alarmUiPendingRequestCount++;
+    }
+  }
+
+  bool isDue(const unsigned long now, const unsigned long lastRun, const unsigned long interval)
+  {
+    return lastRun == 0 || (now - lastRun) >= interval;
+  }
+}
 
 // in general, we want tones to last forever, although
 // I may implement blinking later.
@@ -780,6 +817,72 @@ void muteTimeoutWatchdog(Stream *serialport)
   }
 }
 
+void serviceAlarmUiAudio(Stream *serialport)
+{
+  if (serialport == nullptr)
+  {
+    return;
+  }
+
+  const unsigned long now = millis();
+
+  static unsigned long lastDfPlayerPollMs = 0;
+  if (isDue(now, lastDfPlayerPollMs, DFPLAYER_POLL_INTERVAL_MS))
+  {
+    lastDfPlayerPollMs = now;
+    dfPlayerUpdate();
+  }
+
+  if (!alarmUiUpdatePending && !alarmAudioUpdatePending)
+  {
+    return;
+  }
+
+  // Leave the menu display in control while the user is navigating.  The latest
+  // alarm state remains pending and will be restored when the menu exits.
+  if (running_menu)
+  {
+    return;
+  }
+
+  const unsigned long settleMs = (alarmUiPendingRequestCount >= ALARM_UI_BURST_REQUEST_COUNT)
+                                     ? ALARM_UI_BURST_SETTLE_MS
+                                     : ALARM_UI_NORMAL_SETTLE_MS;
+  if ((now - lastAlarmUiRequestMs) < settleMs)
+  {
+    return;
+  }
+
+  if (alarmUiUpdatePending && isDue(now, lastAlarmUiUpdateMs, ALARM_UI_MIN_INTERVAL_MS))
+  {
+    alarmUiUpdatePending = false;
+    alarmUiPendingRequestCount = 0;
+    lastAlarmUiUpdateMs = now;
+    showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
+  }
+
+  if (alarmAudioUpdatePending && isDue(now, lastAlarmAudioUpdateMs, ALARM_AUDIO_MIN_INTERVAL_MS))
+  {
+    alarmAudioUpdatePending = false;
+    lastAlarmAudioUpdateMs = now;
+
+    if (currentLevel <= 0)
+    {
+      serialport->println(F("Silent level: skipping DFPlayer playback."));
+    }
+    else if (currentlyMuted)
+    {
+      serialport->println(F("Muted: skipping DFPlayer playback."));
+    }
+    else
+    {
+      serialport->println(F("dfPlayer.play"));
+      serialport->println(currentLevel);
+      playNotBusyLevel(currentLevel);
+    }
+  }
+}
+
 void GPAD_HAL_loop()
 {
   muteButton.poll();
@@ -789,6 +892,7 @@ void GPAD_HAL_loop()
 #endif
 
   muteTimeoutWatchdog(local_ptr_to_serial);
+  serviceAlarmUiAudio(local_ptr_to_serial);
 }
 
 /* Assumes LCD has been initilized
@@ -988,47 +1092,27 @@ void unchanged_anunicateAlarmLevel(Stream *serialport)
 }
 void restoreAlarmLevel(Stream *serialport)
 {
-  showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
-}
-
-void annunciateAlarmLevel(Stream *serialport)
-{
-  static unsigned long lastAnnunciateMs = 0;
-  const unsigned long now = millis();
-
   if (serialport == nullptr)
   {
     return;
   }
 
-  // Avoid long back-to-back UI/audio work under message bursts.
-  if ((now - lastAnnunciateMs) < 50)
+  markAlarmUiAudioPending(false);
+}
+
+void annunciateAlarmLevel(Stream *serialport)
+{
+  if (serialport == nullptr)
   {
-    unchanged_anunicateAlarmLevel(serialport);
     return;
   }
-  lastAnnunciateMs = now;
 
+  // Keep the immediate work cheap so MQTT callbacks and serial/SPI handlers can
+  // return quickly.  LCD redraw and DFPlayer commands are coalesced in
+  // serviceAlarmUiAudio(), which is run later from GPAD_HAL_loop().
   start_of_song = millis();
   unchanged_anunicateAlarmLevel(serialport);
-  showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
-  // here is the new call
-    if (currentLevel <= 0)
-  {
-    serialport->println(F("Silent level: skipping DFPlayer playback."));
-  }
-  else if (currentlyMuted)
-  {
-    serialport->println(F("Muted: skipping DFPlayer playback."));
-  }
-  else
-  {
-    serialport->println(F("dfPlayer.play"));
-    serialport->println(currentLevel);
-    playNotBusyLevel(currentLevel);
-  }
-
-  yield();
+  markAlarmUiAudioPending();
 }
 
 GPAD_API::GPAD_API(SemanticVersion version)
