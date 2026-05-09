@@ -81,29 +81,32 @@ AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
 const size_t SERIAL_LOG_MAX_CHARS = 12000;
-String serialLogBuffer;
+char serialLogBuffer[SERIAL_LOG_MAX_CHARS + 1];
+size_t serialLogLength = 0;
 
 void appendSerialLog(const char *text, size_t len)
 {
-  if (len == 0)
+  if (text == nullptr || len == 0)
   {
     return;
   }
 
-  if (len > SERIAL_LOG_MAX_CHARS)
+  if (len >= SERIAL_LOG_MAX_CHARS)
   {
     text += (len - SERIAL_LOG_MAX_CHARS);
     len = SERIAL_LOG_MAX_CHARS;
+    serialLogLength = 0;
+  }
+  else if ((serialLogLength + len) > SERIAL_LOG_MAX_CHARS)
+  {
+    const size_t overflow = (serialLogLength + len) - SERIAL_LOG_MAX_CHARS;
+    memmove(serialLogBuffer, serialLogBuffer + overflow, serialLogLength - overflow);
+    serialLogLength -= overflow;
   }
 
-  for (size_t i = 0; i < len; ++i)
-  {
-    serialLogBuffer += text[i];
-  }
-  if (serialLogBuffer.length() > SERIAL_LOG_MAX_CHARS)
-  {
-    serialLogBuffer.remove(0, serialLogBuffer.length() - SERIAL_LOG_MAX_CHARS);
-  }
+  memcpy(serialLogBuffer + serialLogLength, text, len);
+  serialLogLength += len;
+  serialLogBuffer[serialLogLength] = '\0';
 }
 
 class SerialMirrorStream : public Stream
@@ -179,18 +182,6 @@ WifiOTA::Manager wifiManager(WiFi, debugSerial);
 // #define DEBUG 0
 #define DEBUG 1
 // #define DEBUG 4
-
-unsigned long last_command_ms;
-
-// We have currently defined our alam time to include 10-second "songs",
-// So we will not process a new alarm condition until we have completed one song.
-const unsigned long DELAY_BEFORE_NEW_COMMAND_ALLOWED = 10000;
-const unsigned int NUM_WIFI_RECONNECT_RETRIES = 3;
-
-const int LED_PINS[] = {LIGHT0, LIGHT1, LIGHT2, LIGHT3, LIGHT4};
-// const int SWITCH_PINS[] = { SW1, SW2, SW3, SW4 };  // SW1, SW2, SW3, SW4
-const int LED_COUNT = sizeof(LED_PINS) / sizeof(LED_PINS[0]);
-// const int SWITCH_COUNT = sizeof(SWITCH_PINS) / sizeof(SWITCH_PINS[0]);
 
 // MQTT Broker
 // #define USE_HIVEMQ
@@ -349,8 +340,8 @@ void publishOnLineMsg(void)
 #endif
 
     dtostrf(rssi, 1, 2, rssiString);
-    char onLineMsg[32] = " online, RSSI:";
-    strcat(onLineMsg, rssiString);
+    char onLineMsg[32];
+    snprintf(onLineMsg, sizeof(onLineMsg), " online, RSSI:%s", rssiString);
     client.publish(publish_Ack_Topic, onLineMsg, true);
 
     // This should be moved to a place after the WiFi connect success
@@ -394,17 +385,20 @@ bool reconnect(bool force = false)
   lastMqttReconnectAttemptMs = now;
   mqttReconnectRequested = false;
 
-  const String clientId = String(COMPANY_NAME) + "-" + String(macAddressString);
-  const String willPayload = String(device_role) + " offline";
+  char clientId[sizeof(COMPANY_NAME) + MAC_ADDRESS_STRING_LENGTH + 1];
+  snprintf(clientId, sizeof(clientId), "%s-%s", COMPANY_NAME, macAddressString);
+  char willPayload[DEVICE_ROLE_MAX_LEN + 9];
+  snprintf(willPayload, sizeof(willPayload), "%s offline", device_role);
   debugSerial.print("Attempting MQTT connection at: ");
   debugSerial.print(millis());
   debugSerial.print("..... ");
-  if (client.connect(clientId.c_str(), mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload.c_str()))
+  if (client.connect(clientId, mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload))
   {
     debugSerial.print("success at: ");
     debugSerial.println(millis());
-    String onlinePayload = String(device_role) + " online";
-    client.publish(publish_Ack_Topic, onlinePayload.c_str(), true);
+    char onlinePayload[DEVICE_ROLE_MAX_LEN + 8];
+    snprintf(onlinePayload, sizeof(onlinePayload), "%s online", device_role);
+    client.publish(publish_Ack_Topic, onlinePayload, true);
     client.subscribe(subscribe_Alarm_Topic); // Subscribe to GPAD API alarms
     if (MQTT_DISCOVERY_SUBSCRIBE_ALL)
     {
@@ -1645,6 +1639,8 @@ void setup()
   // Serial setup
   delay(100);
   debugSerial.begin(BAUDRATE);
+  serialLogBuffer[0] = '\0';
+  serialLogLength = 0;
   const unsigned long serialStartMs = millis();
   while (!debugSerial && (millis() - serialStartMs) < 2000)
   {
@@ -1791,20 +1787,19 @@ void setup()
 
   debugSerial.println(F("initLiffleFS"));
 
-  server.begin(); // Start server web socket to render pages
-  
-  debugSerial.println(F("iStart server web socket to render pages"));
+  setupOTA();
+  debugSerial.println(F("setupOTA"));
 
   ElegantOTA.begin(&server);
   debugSerial.println(F("ElegantOTA.begin"));
 
-  setupOTA();
-  debugSerial.println(F("setupOTA"));
+  server.begin(); // Start server web socket to render pages
+  debugSerial.println(F("Start server web socket to render pages"));
 
 
   initRotator();
   debugSerial.println(F("initRotator"));
-  splashLCD(wifiManager.getMode(), deviceAddress);
+  splashLCD(wifiManager.getMode(), wifiManager.getAddress());
 
   debugSerial.println(F("splashLCD"));
 
@@ -1820,17 +1815,6 @@ void setup()
   turnOnAllLamps();
   digitalWrite(LED_BUILTIN, LOW); // turn the LED off at end of setup
 } // end of setup()
-
-unsigned long last_ms = 0;
-void toggle(int pin)
-{
-  digitalWrite(pin, digitalRead(pin) ? LOW : HIGH);
-}
-
-const unsigned long LOW_FREQ_DEBUG_MS = 20000;
-unsigned long time_since_LOW_FREQ_ms = 0;
-
-int cnt_actions = 0;
 
 bool running_menu = false;
 bool menu_just_exited = false;
@@ -1902,9 +1886,5 @@ void loop()
     poll_GPAD_menu();
   }
 
-  // if ((millis() / 10000) > cnt_actions) {
-  //   cnt_actions++;
-  //   navigate_to_n_and_execute(cnt_actions % 3);
-  // }
-  yield();
+  delay(1);
 }

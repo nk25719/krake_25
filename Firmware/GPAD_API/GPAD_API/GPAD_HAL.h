@@ -308,7 +308,7 @@ void restoreAlarmLevel(Stream *serialport);
 void unchanged_anunicateAlarmLevel(Stream *serialport);
 void annunciateAlarmLevel(Stream *serialport);
 void clearLCD(void);
-void splashLCD(wifi_mode_t wifiMode, IPAddress &deviceIp);
+void splashLCD(wifi_mode_t wifiMode, const IPAddress &deviceIp);
 
 void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *client);
 

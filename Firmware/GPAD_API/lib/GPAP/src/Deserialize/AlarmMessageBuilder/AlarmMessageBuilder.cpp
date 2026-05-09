@@ -16,6 +16,7 @@
 */
 
 #include "AlarmMessageBuilder.h"
+#include <cctype>
 
 using namespace gpap_message::alarm;
 using namespace gpap_message::deserialize;
@@ -29,9 +30,9 @@ AlarmMessageBuilder::AlarmMessageBuilder()
 
 std::size_t AlarmMessageBuilder::deserializeLevel(const char *const buffer, const std::size_t numBytes)
 {
-    if (numBytes == 0)
+    if (numBytes == 0 || buffer == nullptr)
     {
-        throw;
+        return 0;
     }
 
     this->level = static_cast<AlarmMessage::Level>(buffer[0]);
@@ -63,7 +64,7 @@ std::size_t AlarmMessageBuilder::deserializeId(const char *const buffer, const s
         }
         else if (idLength < AlarmMessageId::MAX_LENGTH)
         {
-            this->idBuffer.at(idLength) = buffer[bufferIndex];
+            this->idBuffer[idLength] = buffer[bufferIndex];
             ++idLength;
         }
     }
@@ -71,7 +72,7 @@ std::size_t AlarmMessageBuilder::deserializeId(const char *const buffer, const s
     // If the terminating character, }, was not found then it is an invalid string
     if (!foundEnd)
     {
-        throw;
+        return numBytes;
     }
     else
     {
@@ -107,7 +108,7 @@ AlarmMessageBuilder::deserializeTypeDesignator(const char *const buffer, const s
         }
         else if (designatorLength < AlarmTypeDesignator::DESIGNATOR_LENGTH)
         {
-            this->designatorBuffer.at(designatorLength) = currBuffer[designatorLength];
+            this->designatorBuffer[designatorLength] = currBuffer[designatorLength];
             ++designatorLength;
         }
     }
@@ -116,7 +117,7 @@ AlarmMessageBuilder::deserializeTypeDesignator(const char *const buffer, const s
         (designatorLength != AlarmTypeDesignator::DESIGNATOR_LENGTH &&
          designatorLength != 0))
     {
-        throw;
+        return numBytes;
     }
     else
     {
@@ -138,7 +139,12 @@ std::size_t AlarmMessageBuilder::deserializeMessage(const char *const buffer, co
             break;
         }
 
-        this->messageBuffer.at(messageLength) = buffer[messageLength];
+        if (messageLength >= AlarmContent::MAX_LENGTH)
+        {
+            break;
+        }
+
+        this->messageBuffer[messageLength] = buffer[messageLength];
     }
 
     this->messageLength = messageLength;
@@ -216,6 +222,99 @@ AlarmMessage AlarmMessageBuilder::buildAlarmMessage(const char *const buffer, co
                         std::move(content),
                         std::move(messageId),
                         std::move(typeDesignator));
+}
+
+bool AlarmMessageBuilder::isValidAlarmMessage(const char *const buffer, const std::size_t numBytes) noexcept
+{
+    if (buffer == nullptr || numBytes == 0)
+    {
+        return false;
+    }
+
+    const char level = buffer[0];
+    if (level < '0' || level > '5')
+    {
+        return false;
+    }
+
+    bool foundId = false;
+    bool foundDesignator = false;
+    bool foundMessage = false;
+    std::size_t index = 1;
+
+    while (index < numBytes)
+    {
+        const char current = buffer[index];
+        if (current == ID_START_CHARACTER)
+        {
+            if (foundId)
+            {
+                return false;
+            }
+            foundId = true;
+            std::size_t idLength = 0;
+            ++index;
+            while (index < numBytes && buffer[index] != ID_END_CHARACTER)
+            {
+                if (++idLength > AlarmMessageId::MAX_LENGTH || isReservedCharacter(buffer[index]) ||
+                    !std::isxdigit(static_cast<unsigned char>(buffer[index])))
+                {
+                    return false;
+                }
+                ++index;
+            }
+            if (index >= numBytes || buffer[index] != ID_END_CHARACTER)
+            {
+                return false;
+            }
+            ++index;
+            continue;
+        }
+
+        if (current == DESIGNATOR_START_CHARACTER)
+        {
+            if (foundDesignator)
+            {
+                return false;
+            }
+            foundDesignator = true;
+            std::size_t designatorLength = 0;
+            ++index;
+            while (index < numBytes && buffer[index] != DESIGNATOR_END_CHARACTER)
+            {
+                if (++designatorLength > AlarmTypeDesignator::DESIGNATOR_LENGTH || isReservedCharacter(buffer[index]) ||
+                    !std::isdigit(static_cast<unsigned char>(buffer[index])))
+                {
+                    return false;
+                }
+                ++index;
+            }
+            if (index >= numBytes || buffer[index] != DESIGNATOR_END_CHARACTER ||
+                (designatorLength != 0 && designatorLength != AlarmTypeDesignator::DESIGNATOR_LENGTH))
+            {
+                return false;
+            }
+            ++index;
+            continue;
+        }
+
+        if (foundMessage || isReservedCharacter(current))
+        {
+            return false;
+        }
+        foundMessage = true;
+        std::size_t messageLength = 0;
+        while (index < numBytes && !isReservedCharacter(buffer[index]))
+        {
+            if (++messageLength > AlarmContent::MAX_LENGTH)
+            {
+                return false;
+            }
+            ++index;
+        }
+    }
+
+    return true;
 }
 
 bool AlarmMessageBuilder::isReservedCharacter(const char character)

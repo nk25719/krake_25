@@ -45,7 +45,7 @@ std::array<char, AlarmMessageId::TOTAL_MAX_LENGTH> AlarmMessageId::validateId(
     // number of elements
     if (idLength > id.size())
     {
-        throw;
+        return validatedId;
     }
 
     auto startIterator = id.cbegin();
@@ -62,11 +62,11 @@ std::array<char, AlarmMessageId::TOTAL_MAX_LENGTH> AlarmMessageId::validateId(
             return std::isxdigit(static_cast<unsigned char>(hexChar));
         });
 
-    // If all the characters are NOT hex characters we need to throw an error and
-    // cancel the creation of this instance.
+    // Invalid characters leave the object printable but empty; validation rejects
+    // malformed GPAP messages before construction on embedded builds.
     if (!allHex)
     {
-        throw;
+        validatedId.fill('\0');
     }
 
     *validatedIdIterator = '\0';
