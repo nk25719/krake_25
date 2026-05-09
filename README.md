@@ -9,7 +9,6 @@ The Krake extends the original GPAD architecture with:
 * Rotary encoder navigation
 * 20x4 LCD interface
 * DFPlayer audio playback
-* Persistent configuration storage
 * OTA firmware updates
 * Configurable COM port
 * Alarm queue handling
