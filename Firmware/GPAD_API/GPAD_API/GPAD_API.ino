@@ -71,11 +71,14 @@
 #include "WiFiManagerOTA.h"
 #include <ESPAsyncWebServer.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
 
 #include "InterruptRotator.h"
 
 #include "DFPlayer.h"
 #include "GPAD_menu.h"
+#include "mqtt_handler.h"
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -179,9 +182,12 @@ WifiOTA::Manager wifiManager(WiFi, debugSerial);
 
 #define DEBUG_SPI 0
 
-// #define DEBUG 0
-#define DEBUG 1
+#define DEBUG 0
 // #define DEBUG 4
+
+#ifndef ENABLE_HEAP_DIAGNOSTICS
+#define ENABLE_HEAP_DIAGNOSTICS 0
+#endif
 
 // MQTT Broker
 // #define USE_HIVEMQ
@@ -342,7 +348,7 @@ void publishOnLineMsg(void)
     dtostrf(rssi, 1, 2, rssiString);
     char onLineMsg[32];
     snprintf(onLineMsg, sizeof(onLineMsg), " online, RSSI:%s", rssiString);
-    client.publish(publish_Ack_Topic, onLineMsg, true);
+    queueMqtt(publish_Ack_Topic, onLineMsg, true);
 
     // This should be moved to a place after the WiFi connect success
     //  debugSerial.print("Device connected at IPaddress: "); //FLE
@@ -389,16 +395,20 @@ bool reconnect(bool force = false)
   snprintf(clientId, sizeof(clientId), "%s-%s", COMPANY_NAME, macAddressString);
   char willPayload[DEVICE_ROLE_MAX_LEN + 9];
   snprintf(willPayload, sizeof(willPayload), "%s offline", device_role);
+#if (DEBUG > 0)
   debugSerial.print("Attempting MQTT connection at: ");
   debugSerial.print(millis());
   debugSerial.print("..... ");
+#endif
   if (client.connect(clientId, mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload))
   {
+#if (DEBUG > 0)
     debugSerial.print("success at: ");
     debugSerial.println(millis());
+#endif
     char onlinePayload[DEVICE_ROLE_MAX_LEN + 8];
     snprintf(onlinePayload, sizeof(onlinePayload), "%s online", device_role);
-    client.publish(publish_Ack_Topic, onlinePayload, true);
+    queueMqtt(publish_Ack_Topic, onlinePayload, true);
     client.subscribe(subscribe_Alarm_Topic); // Subscribe to GPAD API alarms
     if (MQTT_DISCOVERY_SUBSCRIBE_ALL)
     {
@@ -415,8 +425,10 @@ bool reconnect(bool force = false)
     return true;
   }
 
+#if (DEBUG > 0)
   debugSerial.print("failed, rc=");
   debugSerial.println(client.state());
+#endif
   yield();
   return false;
 }
@@ -477,9 +489,9 @@ void clearTrackedKrakes()
   }
 }
 
-int indexForKrake(const String &krakeId)
+int indexForKrake(const char *krakeId)
 {
-  if (krakeId.length() == 0)
+  if (krakeId == nullptr || krakeId[0] == '\0')
   {
     return -1;
   }
@@ -487,7 +499,7 @@ int indexForKrake(const String &krakeId)
   int freeSlot = -1;
   for (uint8_t i = 0; i < MAX_TRACKED_KRAKES; i++)
   {
-    if (trackedKrakes[i].inUse && krakeId.equalsIgnoreCase(trackedKrakes[i].id))
+    if (trackedKrakes[i].inUse && strcasecmp(krakeId, trackedKrakes[i].id) == 0)
     {
       return i;
     }
@@ -500,39 +512,86 @@ int indexForKrake(const String &krakeId)
   if (freeSlot >= 0)
   {
     trackedKrakes[freeSlot].inUse = true;
-    krakeId.toCharArray(trackedKrakes[freeSlot].id, sizeof(trackedKrakes[freeSlot].id));
+    strncpy(trackedKrakes[freeSlot].id, krakeId, sizeof(trackedKrakes[freeSlot].id) - 1);
+    trackedKrakes[freeSlot].id[sizeof(trackedKrakes[freeSlot].id) - 1] = '\0';
     return freeSlot;
   }
 
   return -1;
 }
 
-String extractKrakeIdFromAckTopic(const char *topic)
+void uppercaseAscii(char *value)
 {
-  String id(topic);
-  id.toUpperCase();
-  if (id.endsWith("_ACK"))
+  if (value == nullptr)
   {
-    id.remove(id.length() - 4);
+    return;
   }
-  return id;
+  for (size_t i = 0; value[i] != '\0'; i++)
+  {
+    if (value[i] >= 'a' && value[i] <= 'z')
+    {
+      value[i] = value[i] - ('a' - 'A');
+    }
+  }
 }
 
-int parseRssiFromStatus(const String &status)
+void trimTrailingSpaces(char *value)
 {
-  const int marker = status.indexOf("RSSI:");
-  if (marker < 0)
+  if (value == nullptr)
+  {
+    return;
+  }
+  size_t len = strlen(value);
+  while (len > 0 && isspace((unsigned char)value[len - 1]))
+  {
+    value[--len] = '\0';
+  }
+}
+
+void extractKrakeIdFromAckTopic(const char *topic, char *dest, size_t destLen)
+{
+  if (destLen == 0)
+  {
+    return;
+  }
+  dest[0] = '\0';
+  if (topic == nullptr)
+  {
+    return;
+  }
+  strncpy(dest, topic, destLen - 1);
+  dest[destLen - 1] = '\0';
+  uppercaseAscii(dest);
+  const size_t len = strlen(dest);
+  if (len >= 4 && strcmp(dest + len - 4, "_ACK") == 0)
+  {
+    dest[len - 4] = '\0';
+  }
+}
+
+int parseRssiFromStatus(const char *status)
+{
+  if (status == nullptr)
   {
     return 0;
   }
-  String rssiPart = status.substring(marker + 5);
-  rssiPart.trim();
-  return rssiPart.toInt();
+  const char *marker = strstr(status, "RSSI:");
+  if (marker == nullptr)
+  {
+    return 0;
+  }
+  marker += 5;
+  while (*marker != '\0' && isspace((unsigned char)*marker))
+  {
+    marker++;
+  }
+  return atoi(marker);
 }
 
-void updateKrakeStatusFromAck(const char *topic, const String &statusMsg)
+void updateKrakeStatusFromAck(const char *topic, const char *statusMsg)
 {
-  const String krakeId = extractKrakeIdFromAckTopic(topic);
+  char krakeId[sizeof(trackedKrakes[0].id)];
+  extractKrakeIdFromAckTopic(topic, krakeId, sizeof(krakeId));
   const int idx = indexForKrake(krakeId);
   if (idx < 0)
   {
@@ -542,7 +601,7 @@ void updateKrakeStatusFromAck(const char *topic, const String &statusMsg)
   trackedKrakes[idx].lastSeenMs = millis();
   trackedKrakes[idx].lastStatusMs = millis();
   trackedKrakes[idx].rssi = parseRssiFromStatus(statusMsg);
-  strncpy(trackedKrakes[idx].status, statusMsg.c_str(), sizeof(trackedKrakes[idx].status) - 1);
+  strncpy(trackedKrakes[idx].status, statusMsg != nullptr ? statusMsg : "", sizeof(trackedKrakes[idx].status) - 1);
   trackedKrakes[idx].status[sizeof(trackedKrakes[idx].status) - 1] = '\0';
   strncpy(trackedKrakes[idx].lastTopic, topic, sizeof(trackedKrakes[idx].lastTopic) - 1);
   trackedKrakes[idx].lastTopic[sizeof(trackedKrakes[idx].lastTopic) - 1] = '\0';
@@ -560,22 +619,26 @@ bool isWatchedTopic(const char *topic)
   return false;
 }
 
-String extractKrakeIdFromTopic(const char *topic)
+void extractKrakeIdFromTopic(const char *topic, char *dest, size_t destLen)
 {
-  String id = String(topic);
-  const int slash = id.indexOf('/');
-  if (slash > 0)
+  if (destLen == 0)
   {
-    id = id.substring(0, slash);
+    return;
   }
-  const int underscore = id.indexOf('_');
-  if (underscore > 0)
+  dest[0] = '\0';
+  if (topic == nullptr)
   {
-    id = id.substring(0, underscore);
+    return;
   }
-  id.trim();
-  id.toUpperCase();
-  return id;
+  size_t len = 0;
+  while (topic[len] != '\0' && topic[len] != '/' && topic[len] != '_' && len < (destLen - 1))
+  {
+    dest[len] = topic[len];
+    len++;
+  }
+  dest[len] = '\0';
+  trimTrailingSpaces(dest);
+  uppercaseAscii(dest);
 }
 
 void markWatchedTopicParticipant(const char *topic)
@@ -585,8 +648,9 @@ void markWatchedTopicParticipant(const char *topic)
     return;
   }
 
-  String krakeId = extractKrakeIdFromTopic(topic);
-  if (krakeId.length() == 0)
+  char krakeId[sizeof(trackedKrakes[0].id)];
+  extractKrakeIdFromTopic(topic, krakeId, sizeof(krakeId));
+  if (krakeId[0] == '\0')
   {
     return;
   }
@@ -1104,7 +1168,6 @@ void turnOffAllLamps()
 // Handeler for MQTT subscribed messages
 void callback(char *topic, byte *payload, unsigned int length)
 {
-  // todo, remove use of String here....
   // Note: We will check for topic or topics in the future...
   if (isManagedSubscribedTopic(topic))
   {
@@ -1121,26 +1184,25 @@ void callback(char *topic, byte *payload, unsigned int length)
 
     if (!ackTopic)
     {
+#if (DEBUG > 0)
       debugSerial.print("Topic arrived [");
       debugSerial.print(topic);
       debugSerial.print("] ");
-#if (DEBUG > 0)
       debugSerial.print("|");
       debugSerial.print(mbuff);
       debugSerial.println("|");
-#endif
       debugSerial.println("Received MQTT Msg.");
+#endif
     }
 
-    const String payloadText = String(mbuff);
     if (ackTopic)
     {
-      updateKrakeStatusFromAck(topic, payloadText);
+      updateKrakeStatusFromAck(topic, mbuff);
       return;
     }
     markWatchedTopicParticipant(topic);
     interpretBuffer(mbuff, m, &debugSerial, &client); // Process the MQTT message
-    annunciateAlarmLevel(&debugSerial);
+    requestAlarmRefresh(&debugSerial);
   }
 } // end call back
 
@@ -1601,7 +1663,7 @@ void setupOTA()
                 request->send(403, "text/plain", "topic not allowed; use saved broker-console publish topics");
                 return;
               }
-              bool ok = client.publish(topic.c_str(), payload.c_str());
+              bool ok = queueMqtt(topic.c_str(), payload.c_str());
               if (ok && topic.length() < MAX_TOPIC_LEN)
               {
                 topic.toCharArray(publish_Default_Topic, MAX_TOPIC_LEN);
@@ -1826,15 +1888,19 @@ void serviceMqttClient()
   {
     if (!client.loop())
     {
+#if (DEBUG > 0)
       debugSerial.print(mqtt_broker_name);
       debugSerial.print(" lost MQTT at: ");
       debugSerial.println(millis());
+#endif
       requestMqttReconnect();
     }
+    serviceMqttQueue(&client);
   }
   else if (mqttReconnectRequested || WiFi.status() == WL_CONNECTED)
   {
     reconnect();
+    serviceMqttQueue(&client);
   }
 #endif
 }
@@ -1853,6 +1919,23 @@ void serviceDeferredReset()
     WiFi.disconnect(true, true);
     delay(150);
     ESP.restart();
+  }
+#endif
+}
+
+void serviceHeapDiagnostics()
+{
+#if ENABLE_HEAP_DIAGNOSTICS
+  static unsigned long lastHeapDiagnosticMs = 0;
+  const unsigned long HEAP_DIAGNOSTIC_INTERVAL_MS = 30000;
+  const unsigned long now = millis();
+  if (lastHeapDiagnosticMs == 0 || (now - lastHeapDiagnosticMs) >= HEAP_DIAGNOSTIC_INTERVAL_MS)
+  {
+    lastHeapDiagnosticMs = now;
+    debugSerial.print(F("Free heap: "));
+    debugSerial.print(ESP.getFreeHeap());
+    debugSerial.print(F(" max alloc: "));
+    debugSerial.println(ESP.getMaxAllocHeap());
   }
 #endif
 }
@@ -1898,10 +1981,12 @@ void loop()
   {
     lcd.backlight();
     poll_GPAD_menu();
+    serviceMqttClient();
   }
 
 #if defined HMWK || defined KRAKE
   publishOnLineMsg();
+  serviceHeapDiagnostics();
   wink(); // The builtin LED
 #endif
 

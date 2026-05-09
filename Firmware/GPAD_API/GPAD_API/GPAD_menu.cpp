@@ -8,6 +8,7 @@
 #include "DFPlayer.h"
 #include "alarm_api.h"
 #include "mqtt_handler.h"
+#include "debug_macros.h"
 
 using namespace Menu;
 
@@ -25,13 +26,13 @@ result action1(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    Serial.println(F("Yes, I will take that action #1 !"));
+    DBG_PRINTLN(F("Yes, I will take that action #1 !"));
   }
   //char onLineMsg[32] = "Acknowledging!";
   // publishAck(&client, onLineMsg);
   publishGPAPResponse(&client, "a", currentAlarmId);
-  Serial.print("GPAP response sent for ID: ");
-  Serial.println(currentAlarmId);
+  DBG_PRINT(F("GPAP response queued for ID: "));
+  DBG_PRINTLN(currentAlarmId);
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Acknowledged!");
@@ -43,48 +44,48 @@ result action2(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    Serial.println(F("Yes, I will take that action #2 !"));
+    DBG_PRINTLN(F("Yes, I will take that action #2 !"));
   }
   char emptyMsg[] = "";
   alarm(silent, emptyMsg, &Serial);      // sets currentLevel=0, clears AlarmMessageBuffer
-  annunciateAlarmLevel(&Serial);          // turns off LEDs, updates LCD, stops DFPlayer buzzer
+  requestAlarmRefresh(&Serial);           // coalesces LCD/audio updates from loop()
   //char onLineMsg[32] = "Dismissed!";
   // publishAck(&client, onLineMsg);
   publishGPAPResponse(&client, "d", currentAlarmId);
-  Serial.print("GPAP response sent for ID: ");
-  Serial.println(currentAlarmId);
+  DBG_PRINT(F("GPAP response queued for ID: "));
+  DBG_PRINTLN(currentAlarmId);
   return proceed;
 }
 result action3(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    Serial.println(F("Yes, I will take that action #3 !"));
+    DBG_PRINTLN(F("Yes, I will take that action #3 !"));
   }
   char emptyMsg[] = "";
   alarm(silent, emptyMsg, &Serial);
-  annunciateAlarmLevel(&Serial);
+  requestAlarmRefresh(&Serial);
   //char onLineMsg[32] = "Shelved!";
   // publishAck(&client, onLineMsg);
   publishGPAPResponse(&client, "s", currentAlarmId);
-  Serial.print("GPAP response sent for ID: ");
-  Serial.println(currentAlarmId);
+  DBG_PRINT(F("GPAP response queued for ID: "));
+  DBG_PRINTLN(currentAlarmId);
   return proceed;
 }
 result action4(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    Serial.println(F("Yes, I will take that action #3 !"));
+    DBG_PRINTLN(F("Yes, I will take that action #3 !"));
   }
-  Serial.print(F("volume value: "));
-  Serial.println(volumeDFPlayer);
+  DBG_PRINT(F("volume value: "));
+  DBG_PRINTLN(volumeDFPlayer);
   setVolume(volumeDFPlayer);
   return proceed;
 }
 result action5(eventMask e)
 {
-  Serial.println("exiting menu");
+  DBG_PRINTLN(F("exiting menu"));
   running_menu = false;
   menu_just_exited = true;
   Menu::doExit();
@@ -95,7 +96,7 @@ result actionResetConfirm(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    Serial.println(F("Reset confirmed. Restarting device..."));
+    DBG_PRINTLN(F("Reset confirmed. Restarting device..."));
     delay(100);
     ESP.restart();
   }
@@ -182,11 +183,11 @@ result actionMuteTimeout(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    Serial.print(F("Mute timeout set: "));
-    Serial.print(muteTimeoutMinutes);
-    Serial.println(F(" min"));
+    DBG_PRINT(F("Mute timeout set: "));
+    DBG_PRINT(muteTimeoutMinutes);
+    DBG_PRINTLN(F(" min"));
     setMuteTimeoutMinutes((unsigned long)muteTimeoutMinutes);
-    annunciateAlarmLevel(&Serial);
+    requestAlarmRefresh(&Serial);
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Muted for:");
@@ -245,8 +246,8 @@ NAVROOT(nav, mainMenu, MAX_DEPTH, in, out);
 
 void registerRotationEvent(bool CW)
 {
-  Serial.print("CW: ");
-  Serial.println(CW);
+  DBG_PRINT(F("CW: "));
+  DBG_PRINTLN(CW);
   // Note: Rob believes it is more "natural" for clockwise to mean "up".
   // Apparently, whoever wrote the "MENU_INPUTS" believes the opposite,
   // so I am changing this hear to reverse the sense.
@@ -274,7 +275,7 @@ void poll_GPAD_menu()
 
 void navigate_to_n_and_execute(int n)
 {
-  Serial.println("moving to zero and executing!");
+  DBG_PRINTLN(F("moving to zero and executing!"));
   nav.doNav(navCmd(idxCmd, n)); // hilite second option
   // nav.doNav(navCmd(enterCmd)); //execute option
 }

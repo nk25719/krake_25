@@ -22,6 +22,7 @@
 #include "gpad_utility.h"
 #include "alarm_api.h"
 #include "GPAD_HAL.h"
+#include "debug_macros.h"
 // #include <Arduino.h>
 
 extern bool currentlyMuted;
@@ -70,6 +71,7 @@ void processSerial(Stream *debugPort, Stream *inputPort, PubSubClient *client)
       const int rlen = (int)writeIndex;
       buf[rlen] = '\0';
 
+#if (GPAD_DEBUG > 0)
       debugPort->print(F("I received: "));
       debugPort->print(rlen);
       for (int i = 0; i < rlen; i++)
@@ -77,11 +79,12 @@ void processSerial(Stream *debugPort, Stream *inputPort, PubSubClient *client)
         debugPort->print(buf[i]);
       }
       debugPort->println();
+#endif
 
       if (rlen > 0)
       {
         interpretBuffer(buf, rlen, debugPort, client);
-        annunciateAlarmLevel(debugPort);
+        requestAlarmRefresh(debugPort);
         printAlarmState(debugPort);
         processedCommand = true;
       }
