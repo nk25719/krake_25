@@ -59,6 +59,7 @@
 
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <esp_heap_caps.h>
 
 #include <PubSubClient.h> // From library https://github.com/knolleary/
 
@@ -79,6 +80,7 @@
 #include "DFPlayer.h"
 #include "GPAD_menu.h"
 #include "mqtt_handler.h"
+#include "debug_macros.h"
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -196,13 +198,33 @@ const char *DEFAULT_MQTT_BROKER_NAME = "broker.hivemq.com";
 const char *mqtt_user = "";
 const char *mqtt_password = "";
 #else
-const char *DEFAULT_MQTT_BROKER_NAME = "public.cloud.shiftr.io";
-const char *mqtt_user = "public";
-const char *mqtt_password = "public";
+const char *DEFAULT_MQTT_BROKER_NAME = "krakepubinv.cloud.shiftr.io";
+const char *mqtt_user = "krakepubinv";
+const char *mqtt_password = "DlDmkWjp4I4kgDcA";
 #endif
 const size_t MQTT_BROKER_MAX_LEN = 64;
 const char *MQTT_CONFIG_PATH = "/mqtt.json";
 char mqtt_broker_name[MQTT_BROKER_MAX_LEN] = {0};
+char mqtt_user_storage[32] = {0};
+char mqtt_password_storage[64] = {0};
+struct BrokerOption
+{
+  const char *label;
+  const char *host;
+  uint16_t port;
+  const char *username;
+  const char *password;
+};
+const BrokerOption brokerOptions[] = {
+    {"Public Shiftr", "public.cloud.shiftr.io", 1883, "public", "public"},
+    {"Krake PubInv", "krakepubinv.cloud.shiftr.io", 1883, "krakepubinv", "DlDmkWjp4I4kgDcA"},
+};
+const uint8_t BROKER_OPTION_COUNT = sizeof(brokerOptions) / sizeof(brokerOptions[0]);
+const uint8_t DEFAULT_BROKER_INDEX = 1;
+const uint8_t MQTT_FAILOVER_THRESHOLD = 5;
+uint8_t selectedBrokerIndex = DEFAULT_BROKER_INDEX;
+uint8_t activeBrokerIndex = DEFAULT_BROKER_INDEX;
+uint8_t mqttFailCount = 0;
 const uint8_t MAX_EXTRA_TOPICS = 4;
 const size_t MAX_TOPIC_LEN = 64;
 char subscribe_Extra_Topics[MAX_EXTRA_TOPICS][MAX_TOPIC_LEN];
@@ -219,7 +241,7 @@ const uint8_t MAX_WATCH_TOPICS = 12;
 char watchedTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
 uint8_t watchedTopicCount = 0;
 unsigned long wifiResetRequestedAtMs = 0;
-const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
+const unsigned long MQTT_RECONNECT_INTERVAL_MS = 3000;
 const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 2;
 unsigned long lastMqttReconnectAttemptMs = 0;
 bool mqttReconnectRequested = false;
@@ -241,11 +263,15 @@ struct TrackedKrake
 TrackedKrake trackedKrakes[MAX_TRACKED_KRAKES];
 
 String jsonEscape(const String &raw);
+const char *mqttStateDescription(int state);
 bool endsWithAckTopic(const char *topic);
 bool isAllowedPublishTopic(const String &topic);
 bool extractJsonString(const String &json, const char *key, String &value, int startPos = 0, int *valueEndPos = nullptr);
 bool writeMqttConfig();
 bool loadMqttConfig();
+void applyActiveMqttBrokerConfig();
+bool selectMqttBrokerOption(uint8_t index);
+int8_t findBrokerOptionByHost(const char *host);
 bool parseCsvIntoTopics(const String &rawTopics, char dest[][MAX_TOPIC_LEN], uint8_t &count, uint8_t maxTopics);
 String joinTopicsCsv(const char topics[][MAX_TOPIC_LEN], uint8_t count);
 
@@ -371,10 +397,59 @@ void requestMqttReconnect()
 {
   mqttReconnectRequested = true;
   lastMqttReconnectAttemptMs = 0;
+  mqttFailCount = 0;
   if (client.connected())
   {
     client.disconnect();
   }
+}
+
+void applyActiveMqttBrokerConfig()
+{
+  if (activeBrokerIndex >= BROKER_OPTION_COUNT)
+  {
+    activeBrokerIndex = DEFAULT_BROKER_INDEX;
+  }
+
+  const BrokerOption &broker = brokerOptions[activeBrokerIndex];
+  strncpy(mqtt_broker_name, broker.host, MQTT_BROKER_MAX_LEN - 1);
+  mqtt_broker_name[MQTT_BROKER_MAX_LEN - 1] = '\0';
+  mqtt_user = broker.username;
+  mqtt_password = broker.password;
+  client.setServer(broker.host, broker.port);
+  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+}
+
+bool selectMqttBrokerOption(uint8_t index)
+{
+  if (index >= BROKER_OPTION_COUNT)
+  {
+    return false;
+  }
+
+  selectedBrokerIndex = index;
+  activeBrokerIndex = index;
+  applyActiveMqttBrokerConfig();
+  writeMqttConfig();
+  requestMqttReconnect();
+  return true;
+}
+
+int8_t findBrokerOptionByHost(const char *host)
+{
+  if (host == nullptr || host[0] == '\0')
+  {
+    return -1;
+  }
+
+  for (uint8_t i = 0; i < BROKER_OPTION_COUNT; i++)
+  {
+    if (strcmp(host, brokerOptions[i].host) == 0)
+    {
+      return static_cast<int8_t>(i);
+    }
+  }
+  return -1;
 }
 
 bool reconnect(bool force = false)
@@ -397,22 +472,39 @@ bool reconnect(bool force = false)
   }
   lastMqttReconnectAttemptMs = now;
   mqttReconnectRequested = false;
+  applyActiveMqttBrokerConfig();
 
   char clientId[sizeof(COMPANY_NAME) + MAC_ADDRESS_STRING_LENGTH + 1];
   snprintf(clientId, sizeof(clientId), "%s-%s", COMPANY_NAME, macAddressString);
   char willPayload[DEVICE_ROLE_MAX_LEN + 9];
   snprintf(willPayload, sizeof(willPayload), "%s offline", device_role);
-#if (DEBUG > 0)
   debugSerial.print("Attempting MQTT connection at: ");
   debugSerial.print(millis());
-  debugSerial.print("..... ");
-#endif
+  debugSerial.print(" broker=");
+  debugSerial.print(mqtt_broker_name);
+  debugSerial.print(" user=");
+  debugSerial.print((mqtt_user != nullptr && mqtt_user[0] != '\0') ? mqtt_user : "<none>");
+  debugSerial.print(" ip=");
+  debugSerial.print(WiFi.localIP());
+  debugSerial.print(" rssi=");
+  debugSerial.print(WiFi.RSSI());
+  debugSerial.print(" clientId=");
+  debugSerial.print(clientId);
+  debugSerial.print(" sub=");
+  debugSerial.print(subscribe_Alarm_Topic);
+  debugSerial.print(" pub=");
+  debugSerial.print(publish_Ack_Topic);
+  debugSerial.print(" ... ");
   if (client.connect(clientId, mqtt_user, mqtt_password, publish_Ack_Topic, 1, true, willPayload))
   {
-#if (DEBUG > 0)
     debugSerial.print("success at: ");
     debugSerial.println(millis());
-#endif
+    mqttFailCount = 0;
+    if (selectedBrokerIndex != activeBrokerIndex)
+    {
+      selectedBrokerIndex = activeBrokerIndex;
+      writeMqttConfig();
+    }
     char onlinePayload[DEVICE_ROLE_MAX_LEN + 8];
     snprintf(onlinePayload, sizeof(onlinePayload), "%s online", device_role);
     queueMqtt(publish_Ack_Topic, onlinePayload, true);
@@ -432,12 +524,52 @@ bool reconnect(bool force = false)
     return true;
   }
 
-#if (DEBUG > 0)
   debugSerial.print("failed, rc=");
-  debugSerial.println(client.state());
-#endif
+  debugSerial.print(client.state());
+  debugSerial.print(" ");
+  debugSerial.println(mqttStateDescription(client.state()));
+  mqttFailCount++;
+  if (mqttFailCount >= MQTT_FAILOVER_THRESHOLD)
+  {
+    mqttFailCount = 0;
+    activeBrokerIndex = (activeBrokerIndex + 1) % BROKER_OPTION_COUNT;
+    const BrokerOption &nextBroker = brokerOptions[activeBrokerIndex];
+    debugSerial.print("MQTT failover to ");
+    debugSerial.print(nextBroker.label);
+    debugSerial.print(" host=");
+    debugSerial.println(nextBroker.host);
+  }
   yield();
   return false;
+}
+
+const char *mqttStateDescription(int state)
+{
+  switch (state)
+  {
+  case MQTT_CONNECTION_TIMEOUT:
+    return "connection timeout";
+  case MQTT_CONNECTION_LOST:
+    return "connection lost";
+  case MQTT_CONNECT_FAILED:
+    return "connect failed";
+  case MQTT_DISCONNECTED:
+    return "disconnected";
+  case MQTT_CONNECTED:
+    return "connected";
+  case MQTT_CONNECT_BAD_PROTOCOL:
+    return "bad protocol";
+  case MQTT_CONNECT_BAD_CLIENT_ID:
+    return "bad client id";
+  case MQTT_CONNECT_UNAVAILABLE:
+    return "server unavailable";
+  case MQTT_CONNECT_BAD_CREDENTIALS:
+    return "bad credentials";
+  case MQTT_CONNECT_UNAUTHORIZED:
+    return "unauthorized";
+  default:
+    return "unknown";
+  }
 }
 
 bool isManagedSubscribedTopic(const char *topic)
@@ -731,6 +863,10 @@ String trackedKrakesJson()
   payload += "\",\"watchedTopics\":\"";
   payload += jsonEscape(joinedWatchedTopics());
   payload += "\",\"mqttConnected\":" + String(client.connected() ? "true" : "false") + ",";
+  payload += "\"mqttState\":" + String(client.state()) + ",";
+  payload += "\"mqttStateText\":\"" + jsonEscape(String(mqttStateDescription(client.state()))) + "\",";
+  payload += "\"selectedBrokerIndex\":" + String(selectedBrokerIndex) + ",";
+  payload += "\"activeBrokerIndex\":" + String(activeBrokerIndex) + ",";
   payload += "\"broker\":\"" + jsonEscape(String(mqtt_broker_name)) + "\",";
   payload += "\"subscribeAlarmTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
   payload += "\"publishAckTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
@@ -978,6 +1114,9 @@ bool writeMqttConfig()
 
   String payload = "{";
   payload += "\"broker\":\"" + jsonEscape(String(mqtt_broker_name)) + "\",";
+  payload += "\"selectedBrokerIndex\":\"" + String(selectedBrokerIndex) + "\",";
+  payload += "\"mqttUser\":\"" + jsonEscape(String(mqtt_user != nullptr ? mqtt_user : "")) + "\",";
+  payload += "\"mqttPassword\":\"" + jsonEscape(String(mqtt_password != nullptr ? mqtt_password : "")) + "\",";
   payload += "\"subscribeTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
   payload += "\"publishTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
   payload += "\"subscribeTopics\":\"" + jsonEscape(joinedExtraTopics()) + "\",";
@@ -1010,12 +1149,44 @@ bool loadMqttConfig()
   file.close();
 
   String value;
+  bool loadedBrokerIndex = false;
   if (extractJsonString(content, "broker", value))
   {
     value.trim();
     if (value.length() > 0 && value.length() < MQTT_BROKER_MAX_LEN)
     {
       value.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
+    }
+  }
+
+  if (extractJsonString(content, "selectedBrokerIndex", value))
+  {
+    value.trim();
+    const int parsedIndex = value.toInt();
+    if (value.length() > 0 && parsedIndex >= 0 && parsedIndex < BROKER_OPTION_COUNT)
+    {
+      selectedBrokerIndex = static_cast<uint8_t>(parsedIndex);
+      activeBrokerIndex = selectedBrokerIndex;
+      loadedBrokerIndex = true;
+    }
+  }
+
+  if (extractJsonString(content, "mqttUser", value))
+  {
+    value.trim();
+    if (value.length() < sizeof(mqtt_user_storage))
+    {
+      value.toCharArray(mqtt_user_storage, sizeof(mqtt_user_storage));
+      mqtt_user = mqtt_user_storage;
+    }
+  }
+
+  if (extractJsonString(content, "mqttPassword", value))
+  {
+    if (value.length() < sizeof(mqtt_password_storage))
+    {
+      value.toCharArray(mqtt_password_storage, sizeof(mqtt_password_storage));
+      mqtt_password = mqtt_password_storage;
     }
   }
 
@@ -1065,6 +1236,16 @@ bool loadMqttConfig()
       value.toCharArray(device_role, DEVICE_ROLE_MAX_LEN);
     }
   }
+  if (!loadedBrokerIndex)
+  {
+    const int8_t matchedIndex = findBrokerOptionByHost(mqtt_broker_name);
+    if (matchedIndex >= 0)
+    {
+      selectedBrokerIndex = static_cast<uint8_t>(matchedIndex);
+      activeBrokerIndex = selectedBrokerIndex;
+    }
+  }
+  applyActiveMqttBrokerConfig();
   return true;
 }
 
@@ -1102,17 +1283,32 @@ bool applyMuteSetting(const String &rawValue)
 
 bool applyBrokerSetting(const String &broker)
 {
-  if (broker.length() == 0 || broker.length() >= MQTT_BROKER_MAX_LEN)
+  String normalized = broker;
+  normalized.trim();
+  if (normalized.startsWith("wss://"))
+  {
+    normalized.remove(0, 6);
+  }
+  else if (normalized.startsWith("ws://"))
+  {
+    normalized.remove(0, 5);
+  }
+
+  if (normalized.length() == 0 || normalized.length() >= MQTT_BROKER_MAX_LEN)
   {
     return false;
   }
 
-  broker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
-  client.setServer(mqtt_broker_name, 1883);
-  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
-  requestMqttReconnect();
-  writeMqttConfig();
-  return true;
+  for (uint8_t i = 0; i < BROKER_OPTION_COUNT; i++)
+  {
+    if (normalized.equalsIgnoreCase(brokerOptions[i].host) ||
+        normalized.equalsIgnoreCase(brokerOptions[i].label))
+    {
+      return selectMqttBrokerOption(i);
+    }
+  }
+
+  return false;
 }
 
 bool applyRoleSetting(const String &rawRole)
@@ -1441,7 +1637,7 @@ void setupOTA()
                 request->send(500, "text/plain", "failed to save wifi.json");
                 return;
               }
-              request->send(200, "text/plain", "wifi.json saved"); });
+              request->send(200, "text/plain", "wifi.json saved; restart or reconnect the device to apply"); });
 
   server.on("/manual", HTTP_GET, [](AsyncWebServerRequest *request)
             { sendStaticFile(request, "/manual.html", "text/html"); });
@@ -1456,6 +1652,12 @@ void setupOTA()
             {
               String payload = "{";
               payload += "\"broker\":\"" + jsonEscape(String(mqtt_broker_name)) + "\",";
+              payload += "\"mqttUser\":\"" + jsonEscape(String(mqtt_user != nullptr ? mqtt_user : "")) + "\",";
+              payload += "\"mqttConnected\":" + String(client.connected() ? "true" : "false") + ",";
+              payload += "\"mqttState\":" + String(client.state()) + ",";
+              payload += "\"mqttStateText\":\"" + jsonEscape(String(mqttStateDescription(client.state()))) + "\",";
+              payload += "\"selectedBrokerIndex\":" + String(selectedBrokerIndex) + ",";
+              payload += "\"activeBrokerIndex\":" + String(activeBrokerIndex) + ",";
               payload += "\"subscribeTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
               payload += "\"publishTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
               payload += "\"extraTopics\":\"" + jsonEscape(joinedExtraTopics()) + "\",";
@@ -1480,9 +1682,39 @@ void setupOTA()
                 }
                 else
                 {
-                  broker.toCharArray(mqtt_broker_name, MQTT_BROKER_MAX_LEN);
-                  client.setServer(mqtt_broker_name, 1883);
-                  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+                  if (!applyBrokerSetting(broker))
+                  {
+                    errorMessage += "invalid broker;";
+                  }
+                }
+              }
+
+              if (request->hasParam("mqttUser", true))
+              {
+                String user = request->getParam("mqttUser", true)->value();
+                user.trim();
+                if (user.length() >= sizeof(mqtt_user_storage))
+                {
+                  errorMessage += "invalid mqttUser;";
+                }
+                else
+                {
+                  user.toCharArray(mqtt_user_storage, sizeof(mqtt_user_storage));
+                  mqtt_user = mqtt_user_storage;
+                }
+              }
+
+              if (request->hasParam("mqttPassword", true))
+              {
+                String password = request->getParam("mqttPassword", true)->value();
+                if (password.length() >= sizeof(mqtt_password_storage))
+                {
+                  errorMessage += "invalid mqttPassword;";
+                }
+                else
+                {
+                  password.toCharArray(mqtt_password_storage, sizeof(mqtt_password_storage));
+                  mqtt_password = mqtt_password_storage;
                 }
               }
 
@@ -1799,8 +2031,7 @@ void setup()
   clearPublishTopics();
   clearTrackedKrakes();
   clearWatchedTopics();
-  client.setServer(mqtt_broker_name, 1883); // Default MQTT port, this is a TCP port.
-  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+  applyActiveMqttBrokerConfig(); // PubSubClient uses MQTT over TCP, not WSS.
   client.setCallback(callback);
 
 #if (DEBUG > 0)
@@ -1843,8 +2074,7 @@ void setup()
   publish_Default_Topic[MAX_TOPIC_LEN - 1] = '\0';
 
   loadMqttConfig();
-  client.setServer(mqtt_broker_name, 1883);
-  client.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+  applyActiveMqttBrokerConfig();
 
 #if (DEBUG > 1)
   debugSerial.println("XXXXXXX");
@@ -1880,7 +2110,9 @@ void setup()
   debugSerial.println(F("setupOTA"));
 #endif
 
+  #if ENABLE_OTA
   ElegantOTA.begin(&server);
+  #endif
 #if (DEBUG > 0)
   debugSerial.println(F("ElegantOTA.begin"));
 #endif
@@ -1901,7 +2133,9 @@ void setup()
   debugSerial.println(F("splashLCD"));
 #endif
 
+  #if ENABLE_DFPLAYER
   setupDFPlayer();
+  #endif
 #if (DEBUG > 0)
   debugSerial.println(F("setupDFPlayer"));
 #endif
@@ -1942,6 +2176,32 @@ void serviceMqttClient()
     reconnect();
     serviceMqttQueue(&client);
   }
+#endif
+}
+
+void serviceRuntimeDiagnostics()
+{
+#if ENABLE_DEBUG_LOGS
+  static unsigned long lastDiagnosticsMs = 0;
+  const unsigned long now = millis();
+  if (lastDiagnosticsMs != 0 && (now - lastDiagnosticsMs) < 10000)
+  {
+    return;
+  }
+  lastDiagnosticsMs = now;
+
+  debugSerial.print(F("diag heap="));
+  debugSerial.print(ESP.getFreeHeap());
+  debugSerial.print(F(" largest="));
+  debugSerial.print(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  debugSerial.print(F(" mqtt="));
+  debugSerial.print(client.connected() ? F("connected") : F("disconnected"));
+  debugSerial.print(F(" state="));
+  debugSerial.print(mqttStateDescription(client.state()));
+  debugSerial.print(F(" ui="));
+  debugSerial.print(lcdUiStateName());
+  debugSerial.print(F(" enc="));
+  debugSerial.println(rotaryEncoderEventCount);
 #endif
 }
 
@@ -2012,8 +2272,6 @@ void loop()
 
   if (menu_just_exited)
   {
-    lcd.clear();
-    lcd.noBacklight();
     restoreAlarmLevel(&debugSerial);
     menu_just_exited = false;
   }
@@ -2027,6 +2285,7 @@ void loop()
 #if defined HMWK || defined KRAKE
   publishOnLineMsg();
   serviceHeapDiagnostics();
+  serviceRuntimeDiagnostics();
   wink(); // The builtin LED
 #endif
 

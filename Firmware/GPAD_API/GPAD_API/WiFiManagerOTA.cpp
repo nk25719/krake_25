@@ -191,6 +191,22 @@ wifi_mode_t Manager::getMode()
   return this->wifi.getMode();
 }
 
+void Manager::startConfigPortal(const char *const accessPointSsid, unsigned long timeoutSeconds)
+{
+  this->wifiManager.setConfigPortalTimeout(timeoutSeconds);
+  this->startPortal(accessPointSsid);
+}
+
+bool Manager::forgetSavedCredentials()
+{
+  this->wifiManager.resetSettings();
+  if (LittleFS.exists(WIFI_CREDENTIALS_PATH))
+  {
+    return LittleFS.remove(WIFI_CREDENTIALS_PATH);
+  }
+  return true;
+}
+
 IPAddress Manager::getAddress()
 {
   switch (this->getMode())

@@ -18,4 +18,6 @@ void initRotator();
 void updateRotator();
 void IRAM_ATTR checkPositionISR();
 
+extern volatile unsigned long rotaryEncoderEventCount;
+
 #endif // INTERRUPT_ROTATOR_H

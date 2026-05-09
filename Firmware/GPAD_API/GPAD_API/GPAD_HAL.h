@@ -223,7 +223,28 @@ public :
     _LCD->write(b);
     if (_cursorRow < LCD_ROWS && _cursorCol < LCD_COLS)
     {
-      _lcdMirror[_cursorRow][_cursorCol] = static_cast<char>(b);
+      char mirrorChar = static_cast<char>(b);
+      switch (b)
+      {
+      case 1:
+        mirrorChar = 'W';
+        break;
+      case 2:
+        mirrorChar = 'B';
+        break;
+      case 3:
+        mirrorChar = 'V';
+        break;
+      case 4:
+        mirrorChar = 'M';
+        break;
+      case 5:
+        mirrorChar = 'S';
+        break;
+      default:
+        break;
+      }
+      _lcdMirror[_cursorRow][_cursorCol] = mirrorChar;
     }
 
     if (_cursorCol < LCD_COLS)
@@ -309,6 +330,16 @@ void requestAlarmRefresh(Stream *serialport, bool includeAudio = true);
 void unchanged_anunicateAlarmLevel(Stream *serialport);
 void annunciateAlarmLevel(Stream *serialport);
 void serviceAlarmUiAudio(Stream *serialport);
+bool alarmActionSelectorHandleRotation(bool clockwise);
+bool alarmActionSelectorHandlePress();
+bool isAlarmActionSelectorActive();
+void resetLcdUiToMainPage();
+void showAlarmActions();
+void executeSelectedAlarmAction();
+void showActionFeedback(const char *msg);
+void showInfoPage();
+void showWifiStatusPage();
+const char *lcdUiStateName();
 void clearLCD(void);
 void splashLCD(wifi_mode_t wifiMode, const IPAddress &deviceIp);
 

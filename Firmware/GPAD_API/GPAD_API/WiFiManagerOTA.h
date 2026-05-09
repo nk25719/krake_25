@@ -36,6 +36,8 @@ namespace WifiOTA
         void setApStartedCallback(Callback callback);
         wifi_mode_t getMode();
         IPAddress getAddress();
+        void startConfigPortal(const char *const accessPointSsid, unsigned long timeoutSeconds);
+        bool forgetSavedCredentials();
         bool saveCredentials(const String &ssid, const String &password);
         bool loadCredentials(String &ssid, String &password);
         bool loadCredentialsList(CredentialList &credentials);

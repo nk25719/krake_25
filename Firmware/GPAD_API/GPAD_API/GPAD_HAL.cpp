@@ -28,9 +28,11 @@
 #include "mqtt_handler.h"
 #include "debug_macros.h"
 #include <esp_system.h>
+#include <esp_wifi.h>
 #include <Preferences.h>
 #include <driver/uart.h>
 #include <GPAPMessage.h>
+#include <stdarg.h>
 using namespace gpad_hal;
 
 
@@ -175,6 +177,12 @@ extern char macAddressString[13];
 extern int muteTimeoutMinutes;
 extern char currentAlarmId[11];
 extern char currentAlarmType[4];
+extern PubSubClient client;
+extern char mqtt_broker_name[];
+extern uint8_t selectedBrokerIndex;
+extern uint8_t activeBrokerIndex;
+extern uint8_t mqttFailCount;
+extern const char *mqttStateDescription(int state);
  
 // For LCD
 //  #include <LiquidCrystal_I2C.h>
@@ -227,6 +235,16 @@ namespace
   const unsigned long ALARM_UI_BURST_SETTLE_MS = 150;
   const unsigned long DFPLAYER_POLL_INTERVAL_MS = 100;
   const uint8_t ALARM_UI_BURST_REQUEST_COUNT = 3;
+  const uint8_t LCD_COLS = 20;
+  const uint8_t LCD_ROWS = 4;
+  const uint8_t LCD_STATUS_COL = 16;
+  const uint8_t LCD_MAIN_WIDTH = LCD_STATUS_COL;
+  const uint8_t ICON_WIFI = 1;
+  const uint8_t ICON_BROKER = 2;
+  const uint8_t ICON_VOLUME = 3;
+  const uint8_t ICON_MUTE = 4;
+  const uint8_t ICON_SETTINGS = 5;
+  const unsigned long LCD_RENDER_MIN_INTERVAL_MS = 150;
 
   bool alarmUiUpdatePending = false;
   bool alarmAudioUpdatePending = false;
@@ -235,10 +253,391 @@ namespace
   unsigned long lastAlarmUiUpdateMs = 0;
   unsigned long lastAlarmAudioUpdateMs = 0;
   uint8_t alarmUiPendingRequestCount = 0;
+  bool lcdDirty = true;
+  bool alarmActionSelectorActive = false;
+  uint8_t alarmActionSelection = 0;
+  uint8_t alarmQueueCount = 0;
+  unsigned long lastLcdRenderMs = 0;
+  enum LcdFocus : uint8_t
+  {
+    FOCUS_ALARM_ACTIONS = 0,
+    FOCUS_WIFI = 1,
+    FOCUS_BROKER = 2,
+    FOCUS_MUTE = 3,
+    FOCUS_SETTINGS = 4,
+  };
+  enum LcdPage : uint8_t
+  {
+    PAGE_MAIN = 0,
+    PAGE_WIFI = 1,
+    PAGE_BROKER = 2,
+    PAGE_MUTE = 3,
+    PAGE_INFO = 4,
+    PAGE_WIFI_STATUS = 5,
+  };
+  enum LcdUiState : uint8_t
+  {
+    MAIN_PAGE = 0,
+    SETTINGS_MENU = 1,
+    ICON_MENU = 2,
+    ALARM_ACTION_SELECT = 3,
+    ACTION_FEEDBACK = 4,
+    INFO_PAGE = 5,
+  };
+  LcdFocus lcdFocus = FOCUS_SETTINGS;
+  LcdPage lcdPage = PAGE_MAIN;
+  LcdUiState lcdUiState = MAIN_PAGE;
+  uint8_t lcdPageOption = 0;
+  char actionFeedbackText[LCD_COLS + 1] = "";
+  unsigned long actionFeedbackStartMs = 0;
+  const unsigned long ACTION_FEEDBACK_DURATION_MS = 2500;
+  char previousLcdRows[LCD_ROWS][LCD_COLS + 1] = {
+      "                    ",
+      "                    ",
+      "                    ",
+      "                    ",
+  };
+
+  const char *alarmLevelLabel(AlarmLevel level)
+  {
+    switch (level)
+    {
+    case informational:
+      return "INFO";
+    case problem:
+      return "PROB";
+    case warning:
+      return "WARN";
+    case critical:
+      return "CRIT";
+    case panic:
+      return "PANIC";
+    case silent:
+    default:
+      return "OK";
+    }
+  }
+
+  void markLcdDirty()
+  {
+    lcdDirty = true;
+    alarmUiUpdatePending = true;
+    lastAlarmUiRequestMs = millis();
+  }
+
+  void setLcdUiState(LcdUiState state)
+  {
+    lcdUiState = state;
+    markLcdDirty();
+  }
+
+  bool alarmIsActive()
+  {
+    return currentLevel != silent;
+  }
+
+  uint8_t pageOptionCount()
+  {
+    switch (lcdPage)
+    {
+    case PAGE_WIFI:
+      return 1;
+    case PAGE_BROKER:
+      return 2;
+    case PAGE_MUTE:
+      return 3;
+    case PAGE_MAIN:
+    default:
+      return 0;
+    }
+  }
+
+  LcdFocus nextFocus(LcdFocus focus, bool clockwise)
+  {
+    const uint8_t minFocus = alarmIsActive() ? FOCUS_ALARM_ACTIONS : FOCUS_WIFI;
+    const uint8_t maxFocus = FOCUS_SETTINGS;
+    uint8_t value = static_cast<uint8_t>(focus);
+    if (value < minFocus || value > maxFocus)
+    {
+      value = alarmIsActive() ? FOCUS_ALARM_ACTIONS : FOCUS_SETTINGS;
+    }
+
+    if (clockwise)
+    {
+      value = (value >= maxFocus) ? minFocus : value + 1;
+    }
+    else
+    {
+      value = (value <= minFocus) ? maxFocus : value - 1;
+    }
+    return static_cast<LcdFocus>(value);
+  }
+
+  void clearRowBuffer(char *row)
+  {
+    memset(row, ' ', LCD_COLS);
+    row[LCD_COLS] = '\0';
+  }
+
+  void copyText(char *row, uint8_t col, uint8_t width, const char *text)
+  {
+    if (row == nullptr || text == nullptr || col >= LCD_COLS)
+    {
+      return;
+    }
+
+    uint8_t written = 0;
+    while (text[written] != '\0' && written < width && (col + written) < LCD_COLS)
+    {
+      row[col + written] = text[written];
+      written++;
+    }
+  }
+
+  void formatMain(char *row, const char *fmt, ...)
+  {
+    char temp[LCD_MAIN_WIDTH + 1];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(temp, sizeof(temp), fmt, args);
+    va_end(args);
+    copyText(row, 0, LCD_MAIN_WIDTH, temp);
+  }
+
+  void formatFullRow(char *row, const char *fmt, ...)
+  {
+    char temp[LCD_COLS + 1];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(temp, sizeof(temp), fmt, args);
+    va_end(args);
+    copyText(row, 0, LCD_COLS, temp);
+  }
+
+  unsigned long remainingMuteMinutes()
+  {
+    if (!currentlyMuted || muteTimeoutEndMillis == 0)
+    {
+      return 0;
+    }
+
+    const unsigned long now = millis();
+    if ((now - muteTimeoutEndMillis) < 0x80000000UL)
+    {
+      return 0;
+    }
+
+    return ((muteTimeoutEndMillis - now) + 59999UL) / 60000UL;
+  }
+
+  void currentSsid(char *dest, size_t destLen)
+  {
+    if (destLen == 0)
+    {
+      return;
+    }
+    dest[0] = '\0';
+    wifi_ap_record_t apInfo;
+    if (WiFi.status() == WL_CONNECTED && esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK)
+    {
+      snprintf(dest, destLen, "%s", reinterpret_cast<const char *>(apInfo.ssid));
+      return;
+    }
+    snprintf(dest, destLen, "%s", "Not connected");
+  }
+
+  void ipAddressText(char *dest, size_t destLen)
+  {
+    if (destLen == 0)
+    {
+      return;
+    }
+    IPAddress ip = WiFi.localIP();
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      ip = WiFi.softAPIP();
+    }
+    snprintf(dest, destLen, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+  }
+
+  const char *mqttStatusText()
+  {
+    if (client.connected())
+    {
+      return "Connected";
+    }
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      return "Waiting";
+    }
+    return "Offline";
+  }
+
+  void filterCopy(char *dest, size_t destLen, const char *src)
+  {
+    if (destLen == 0)
+    {
+      return;
+    }
+    dest[0] = '\0';
+    if (src == nullptr)
+    {
+      return;
+    }
+
+    size_t out = 0;
+    for (size_t in = 0; src[in] != '\0' && out < (destLen - 1); in++)
+    {
+      const char c = src[in];
+      if (isPrintable(c) || c == ' ')
+      {
+        dest[out++] = c;
+      }
+    }
+    dest[out] = '\0';
+  }
+
+  void installLcdIcons()
+  {
+    byte wifiIcon[8] = {
+        B00000,
+        B01110,
+        B10001,
+        B00100,
+        B01010,
+        B00000,
+        B00100,
+        B00000,
+    };
+    byte brokerIcon[8] = {
+        B11111,
+        B10001,
+        B10101,
+        B10001,
+        B10101,
+        B10001,
+        B11111,
+        B00000,
+    };
+    byte volumeIcon[8] = {
+        B00001,
+        B00011,
+        B01111,
+        B01111,
+        B01111,
+        B00011,
+        B00001,
+        B00000,
+    };
+    byte muteIcon[8] = {
+        B10001,
+        B01010,
+        B00100,
+        B01010,
+        B10001,
+        B00000,
+        B11111,
+        B00000,
+    };
+    byte settingsIcon[8] = {
+        B00100,
+        B10101,
+        B01110,
+        B11111,
+        B01110,
+        B10101,
+        B00100,
+        B00000,
+    };
+
+    Real_lcd.createChar(ICON_WIFI, wifiIcon);
+    Real_lcd.createChar(ICON_BROKER, brokerIcon);
+    Real_lcd.createChar(ICON_VOLUME, volumeIcon);
+    Real_lcd.createChar(ICON_MUTE, muteIcon);
+    Real_lcd.createChar(ICON_SETTINGS, settingsIcon);
+  }
+
+  void writeStatusIcons(char rows[LCD_ROWS][LCD_COLS + 1])
+  {
+    rows[0][LCD_STATUS_COL] = ICON_WIFI;
+    rows[0][LCD_STATUS_COL + 1] = ICON_BROKER;
+    rows[0][LCD_STATUS_COL + 2] = currentlyMuted ? ICON_MUTE : ICON_VOLUME;
+    rows[0][LCD_STATUS_COL + 3] = ICON_SETTINGS;
+
+    // The compact status cluster lives on row 0; lower rows keep all 20 cells
+    // available for alarm details and the settings/action prompts.
+  }
+
+  void writeRowToLcd(uint8_t row, const char *text)
+  {
+    lcd.setCursor(0, row);
+    for (uint8_t col = 0; col < LCD_COLS; col++)
+    {
+      lcd.write(static_cast<uint8_t>(text[col]));
+    }
+  }
+
+  void renderRows(char rows[LCD_ROWS][LCD_COLS + 1])
+  {
+    const unsigned long now = millis();
+    if (!lcdDirty && lastLcdRenderMs != 0 && (now - lastLcdRenderMs) < LCD_RENDER_MIN_INTERVAL_MS)
+    {
+      return;
+    }
+
+    bool changed = false;
+    for (uint8_t row = 0; row < LCD_ROWS; row++)
+    {
+      rows[row][LCD_COLS] = '\0';
+      if (memcmp(previousLcdRows[row], rows[row], LCD_COLS) != 0)
+      {
+        writeRowToLcd(row, rows[row]);
+        memcpy(previousLcdRows[row], rows[row], LCD_COLS);
+        previousLcdRows[row][LCD_COLS] = '\0';
+        changed = true;
+      }
+    }
+
+    if (changed)
+    {
+      lastLcdRenderMs = now;
+    }
+
+    lcd.noBlink();
+    lcd.noCursor();
+    if (!running_menu)
+    {
+      if (lcdUiState == ALARM_ACTION_SELECT)
+      {
+        const uint8_t actionCols[3] = {0, 4, 12};
+        lcd.setCursor(actionCols[alarmActionSelection], 3);
+        lcd.cursor();
+        lcd.blink();
+      }
+      else if (lcdUiState == MAIN_PAGE)
+      {
+        if (lcdFocus >= FOCUS_WIFI && lcdFocus <= FOCUS_SETTINGS)
+        {
+          lcd.setCursor(LCD_STATUS_COL + static_cast<uint8_t>(lcdFocus) - FOCUS_WIFI, 0);
+          lcd.cursor();
+          lcd.blink();
+        }
+      }
+      else if (lcdUiState == ICON_MENU)
+      {
+        const uint8_t optionRow = (lcdPageOption + 2 >= LCD_ROWS) ? (LCD_ROWS - 1) : (lcdPageOption + 2);
+        lcd.setCursor(0, optionRow);
+        lcd.cursor();
+        lcd.blink();
+      }
+    }
+    lcdDirty = false;
+  }
 
   void markAlarmUiAudioPending(bool includeAudio = true)
   {
     alarmUiUpdatePending = true;
+    lcdDirty = true;
     if (includeAudio)
     {
       alarmAudioUpdatePending = true;
@@ -399,7 +798,15 @@ void encoderSwitchCallback(byte buttonEvent)
     // annunciateAlarmLevel(local_ptr_to_serial);
     // printAlarmState(local_ptr_to_serial);
 
-    registerRotaryEncoderPress();
+    if (running_menu)
+    {
+      registerRotaryEncoderPress();
+    }
+    else if (!alarmActionSelectorHandlePress())
+    {
+      setLcdUiState(SETTINGS_MENU);
+      reset_menu_navigation();
+    }
     break;
   case onRelease:
     // Do nothing...
@@ -415,6 +822,14 @@ void encoderSwitchCallback(byte buttonEvent)
     DBG_PRINT(F("ENCODER_SWITCH Button Long Pressed For "));
     DBG_PRINT(longPressTime);
     DBG_PRINTLN(F("ms"));
+    alarmActionSelectorActive = false;
+    lcdPage = PAGE_MAIN;
+    lcdFocus = FOCUS_SETTINGS;
+    setLcdUiState(SETTINGS_MENU);
+    if (!running_menu)
+    {
+      reset_menu_navigation();
+    }
     break;
 
   // onMultiHit is indicated when you hit the button
@@ -504,6 +919,7 @@ void GPAD_HAL_setup(Stream *serialport, wifi_mode_t wifiMode, IPAddress &deviceI
   Wire.begin();
   
   Real_lcd.init();
+  installLcdIcons();
   
   
 #if (DEBUG > 0)
@@ -835,7 +1251,9 @@ void serviceAlarmUiAudio(Stream *serialport)
   if (isDue(now, lastDfPlayerPollMs, DFPLAYER_POLL_INTERVAL_MS))
   {
     lastDfPlayerPollMs = now;
+#if ENABLE_DFPLAYER
     dfPlayerUpdate();
+#endif
   }
 
   if (!alarmUiUpdatePending && !alarmAudioUpdatePending)
@@ -899,7 +1317,319 @@ void GPAD_HAL_loop()
 #endif
 
   muteTimeoutWatchdog(local_ptr_to_serial);
+  static unsigned long lastDashboardRefreshMs = 0;
+  const unsigned long now = millis();
+  if (lcdUiState == ACTION_FEEDBACK && (now - actionFeedbackStartMs) >= ACTION_FEEDBACK_DURATION_MS)
+  {
+    actionFeedbackText[0] = '\0';
+    setLcdUiState(MAIN_PAGE);
+  }
+  if (!running_menu && !alarmUiUpdatePending && isDue(now, lastDashboardRefreshMs, ALARM_UI_MIN_INTERVAL_MS))
+  {
+    lastDashboardRefreshMs = now;
+    alarmUiUpdatePending = true;
+    lastAlarmUiRequestMs = now;
+  }
   serviceAlarmUiAudio(local_ptr_to_serial);
+}
+
+bool isAlarmActionSelectorActive()
+{
+  return lcdUiState == ALARM_ACTION_SELECT;
+}
+
+const char *lcdUiStateName()
+{
+  switch (lcdUiState)
+  {
+  case MAIN_PAGE:
+    return "MAIN_PAGE";
+  case SETTINGS_MENU:
+    return "SETTINGS_MENU";
+  case ICON_MENU:
+    return "ICON_MENU";
+  case ALARM_ACTION_SELECT:
+    return "ALARM_ACTION_SELECT";
+  case ACTION_FEEDBACK:
+    return "ACTION_FEEDBACK";
+  case INFO_PAGE:
+    return "INFO_PAGE";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+void resetLcdUiToMainPage()
+{
+  lcdPage = PAGE_MAIN;
+  lcdPageOption = 0;
+  alarmActionSelectorActive = false;
+  actionFeedbackText[0] = '\0';
+  if (alarmIsActive())
+  {
+    lcdFocus = FOCUS_ALARM_ACTIONS;
+    alarmActionSelection = 0;
+  }
+  else
+  {
+    lcdFocus = FOCUS_SETTINGS;
+  }
+  setLcdUiState(MAIN_PAGE);
+}
+
+void showAlarmActions()
+{
+  if (!alarmIsActive())
+  {
+    return;
+  }
+  lcdPage = PAGE_MAIN;
+  alarmActionSelectorActive = true;
+  lcdFocus = FOCUS_ALARM_ACTIONS;
+  if (lcdUiState != ALARM_ACTION_SELECT)
+  {
+    alarmActionSelection = 0;
+  }
+  setLcdUiState(ALARM_ACTION_SELECT);
+}
+
+void showActionFeedback(const char *msg)
+{
+  snprintf(actionFeedbackText, sizeof(actionFeedbackText), "%s", msg != nullptr ? msg : "");
+  actionFeedbackStartMs = millis();
+  alarmActionSelectorActive = false;
+  setLcdUiState(ACTION_FEEDBACK);
+}
+
+void showInfoPage()
+{
+  lcdPage = PAGE_INFO;
+  lcdPageOption = 0;
+  alarmActionSelectorActive = false;
+  setLcdUiState(INFO_PAGE);
+  requestAlarmRefresh(local_ptr_to_serial, false);
+}
+
+void showWifiStatusPage()
+{
+  lcdPage = PAGE_WIFI_STATUS;
+  lcdPageOption = 0;
+  alarmActionSelectorActive = false;
+  setLcdUiState(INFO_PAGE);
+  requestAlarmRefresh(local_ptr_to_serial, false);
+}
+
+void executeSelectedAlarmAction()
+{
+  const uint8_t selectedAction = alarmActionSelection;
+  alarmActionSelection = 0;
+  alarmActionSelectorActive = false;
+  executeAlarmAction(selectedAction);
+  switch (selectedAction)
+  {
+  case 0:
+    showActionFeedback("Alarm acknowledged");
+    break;
+  case 1:
+    showActionFeedback("Alarm dismissed");
+    break;
+  case 2:
+    showActionFeedback("Alarm shelved");
+    break;
+  default:
+    break;
+  }
+}
+
+bool alarmActionSelectorHandleRotation(bool clockwise)
+{
+  if (lcdUiState == ICON_MENU)
+  {
+    const uint8_t count = pageOptionCount();
+    if (count > 0)
+    {
+      if (clockwise)
+      {
+        lcdPageOption = (lcdPageOption + 1) % count;
+      }
+      else
+      {
+        lcdPageOption = (lcdPageOption == 0) ? (count - 1) : (lcdPageOption - 1);
+      }
+    }
+    markLcdDirty();
+    requestAlarmRefresh(local_ptr_to_serial, false);
+    return true;
+  }
+
+  if (alarmIsActive())
+  {
+    if (lcdUiState == MAIN_PAGE && lcdFocus >= FOCUS_WIFI && lcdFocus <= FOCUS_SETTINGS)
+    {
+      lcdFocus = nextFocus(lcdFocus, clockwise);
+      markLcdDirty();
+      requestAlarmRefresh(local_ptr_to_serial, false);
+      return true;
+    }
+
+    const bool wasSelectingAlarmAction = (lcdUiState == ALARM_ACTION_SELECT);
+    showAlarmActions();
+    if (!wasSelectingAlarmAction)
+    {
+      requestAlarmRefresh(local_ptr_to_serial, false);
+      return true;
+    }
+    if (clockwise)
+    {
+      if (alarmActionSelection >= 2)
+      {
+        alarmActionSelectorActive = false;
+        lcdFocus = FOCUS_WIFI;
+        setLcdUiState(MAIN_PAGE);
+      }
+      else
+      {
+        alarmActionSelection++;
+      }
+    }
+    else
+    {
+      if (alarmActionSelection == 0)
+      {
+        alarmActionSelectorActive = false;
+        lcdFocus = FOCUS_SETTINGS;
+        setLcdUiState(MAIN_PAGE);
+      }
+      else
+      {
+        alarmActionSelection--;
+      }
+    }
+    markLcdDirty();
+    requestAlarmRefresh(local_ptr_to_serial, false);
+    return true;
+  }
+
+  if (currentLevel == silent)
+  {
+    lcdFocus = nextFocus(lcdFocus, clockwise);
+    alarmActionSelectorActive = false;
+    markLcdDirty();
+    requestAlarmRefresh(local_ptr_to_serial, false);
+    return true;
+  }
+
+  return false;
+}
+
+bool alarmActionSelectorHandlePress()
+{
+  if (lcdUiState == INFO_PAGE)
+  {
+    resetLcdUiToMainPage();
+    requestAlarmRefresh(local_ptr_to_serial, false);
+    return true;
+  }
+
+  if (lcdUiState == ACTION_FEEDBACK)
+  {
+    resetLcdUiToMainPage();
+    requestAlarmRefresh(local_ptr_to_serial, false);
+    return true;
+  }
+
+  if (lcdUiState == ICON_MENU)
+  {
+    if (lcdPage == PAGE_WIFI)
+    {
+      if (lcdPageOption == 0)
+      {
+        resetLcdUiToMainPage();
+      }
+    }
+    else if (lcdPage == PAGE_BROKER)
+    {
+      if (lcdPageOption == 0)
+      {
+        resetLcdUiToMainPage();
+        setLcdUiState(SETTINGS_MENU);
+        open_settings_menu_at(2);
+      }
+      else
+      {
+        resetLcdUiToMainPage();
+      }
+    }
+    else if (lcdPage == PAGE_MUTE)
+    {
+      if (lcdPageOption == 0)
+      {
+        resetLcdUiToMainPage();
+        setLcdUiState(SETTINGS_MENU);
+        open_settings_menu_at(4);
+      }
+      else if (lcdPageOption == 1)
+      {
+        if (currentlyMuted)
+        {
+          clearMuteTimeout();
+          setMuted(false);
+        }
+        else
+        {
+          setMuteTimeoutMinutes((unsigned long)muteTimeoutMinutes);
+        }
+      }
+      else
+      {
+        resetLcdUiToMainPage();
+      }
+    }
+    markLcdDirty();
+    requestAlarmRefresh(local_ptr_to_serial, false);
+    return true;
+  }
+
+  if (alarmIsActive() && lcdUiState != ALARM_ACTION_SELECT && lcdFocus == FOCUS_ALARM_ACTIONS)
+  {
+    return true;
+  }
+
+  if (lcdFocus == FOCUS_WIFI)
+  {
+    lcdPage = PAGE_WIFI;
+    lcdPageOption = 0;
+    setLcdUiState(ICON_MENU);
+  }
+  else if (lcdFocus == FOCUS_BROKER)
+  {
+    lcdPage = PAGE_BROKER;
+    lcdPageOption = 0;
+    setLcdUiState(ICON_MENU);
+  }
+  else if (lcdFocus == FOCUS_MUTE)
+  {
+    lcdPage = PAGE_MUTE;
+    lcdPageOption = 0;
+    setLcdUiState(ICON_MENU);
+  }
+  else if (lcdFocus == FOCUS_SETTINGS)
+  {
+    resetLcdUiToMainPage();
+    setLcdUiState(SETTINGS_MENU);
+    reset_menu_navigation();
+  }
+  else if (lcdUiState != ALARM_ACTION_SELECT)
+  {
+    return false;
+  }
+  else
+  {
+    executeSelectedAlarmAction();
+  }
+  markLcdDirty();
+  requestAlarmRefresh(local_ptr_to_serial, false);
+  return true;
 }
 
 /* Assumes LCD has been initilized
@@ -911,6 +1641,11 @@ void clearLCD(void)
 {
   lcd.noBacklight();
   lcd.clear();
+  for (uint8_t row = 0; row < LCD_ROWS; row++)
+  {
+    clearRowBuffer(previousLcdRows[row]);
+  }
+  lcdDirty = true;
 }
 
 // Splash a message so we can tell the LCD is working
@@ -952,10 +1687,7 @@ void splashLCD(wifi_mode_t wifiMode, const IPAddress &deviceIp)
   lcd.setCursor(0, 2);
   lcd.print(F(__DATE__ " " __TIME__));
 
-  // Line 3
-  lcd.setCursor(0, 3);
-  lcd.print("MAC: ");
-  lcd.print(macAddressString);
+  // Leave row 3 empty; normal UI state owns the bottom row.
 }
 bool printable(char c)
 {
@@ -991,67 +1723,223 @@ void filter_control_chars(char *msg)
   }
   msg[k] = '\0';
 }
-// TODO: We need to break the message up into strings to render properly
-// on the display
-void showStatusLCD(AlarmLevel level, bool muted, char *msg)
+
+void renderWifiPage(char rows[LCD_ROWS][LCD_COLS + 1])
 {
-  lcd.init();
-  lcd.clear();
-  // Possibly we don't need the backlight if the level is zero!
-  if (level != 0)
+  char ssid[21];
+  char ip[21];
+  currentSsid(ssid, sizeof(ssid));
+  ipAddressText(ip, sizeof(ip));
+
+  if (WiFi.status() == WL_CONNECTED)
   {
-    // #if (!LIMIT_POWER_DRAW)
-    lcd.backlight();
-    // #endif
+    formatFullRow(rows[0], "WiFi:%.15s", ssid);
+    formatFullRow(rows[1], "IP:%s", ip);
+    formatFullRow(rows[2], "Open Web UI");
+    formatFullRow(rows[3], "%cBack Open Web UI", lcdPageOption == 0 ? '>' : ' ');
   }
   else
   {
-    lcd.noBacklight();
+    formatFullRow(rows[0], "WiFi Setup");
+    formatFullRow(rows[1], "AP:Krake-Setup");
+    formatFullRow(rows[2], "Go:%s", ip);
+    formatFullRow(rows[3], "%cBack Open Web UI", lcdPageOption == 0 ? '>' : ' ');
+  }
+}
+
+void renderBrokerPage(char rows[LCD_ROWS][LCD_COLS + 1])
+{
+  formatFullRow(rows[0], "Broker/MQTT");
+  formatFullRow(rows[1], "%.20s", mqtt_broker_name);
+  formatFullRow(rows[2], "%cBroker %s F:%u",
+                lcdPageOption == 0 ? '>' : ' ',
+                selectedBrokerIndex == activeBrokerIndex ? "Sel" : "Fail",
+                mqttFailCount);
+  formatFullRow(rows[3], "%cBack %.14s",
+                lcdPageOption == 1 ? '>' : ' ',
+                client.connected() ? mqttStatusText() : mqttStateDescription(client.state()));
+}
+
+void renderMutePage(char rows[LCD_ROWS][LCD_COLS + 1])
+{
+  const unsigned long muteMinutes = remainingMuteMinutes();
+  formatFullRow(rows[0], "Mute");
+  formatFullRow(rows[1], "Mute set:%lu min", currentlyMuted ? muteMinutes : (unsigned long)muteTimeoutMinutes);
+  formatFullRow(rows[2], "%cMute settings", lcdPageOption == 0 ? '>' : ' ');
+  formatFullRow(rows[3], "%c%s  %cBack",
+                lcdPageOption == 1 ? '>' : ' ',
+                currentlyMuted ? "Unmute" : "Mute now",
+                lcdPageOption == 2 ? '>' : ' ');
+}
+
+void renderInfoPage(char rows[LCD_ROWS][LCD_COLS + 1])
+{
+  char ip[21];
+  char ssid[21];
+  ipAddressText(ip, sizeof(ip));
+  currentSsid(ssid, sizeof(ssid));
+
+  formatFullRow(rows[0], "Info");
+  formatFullRow(rows[1], "IP:%s", ip);
+  formatFullRow(rows[2], "MAC:%s", macAddressString);
+  if (ssid[0] != '\0' && strcmp(ssid, "Not connected") != 0)
+  {
+    formatFullRow(rows[3], "SSID:%s", ssid);
+  }
+  else
+  {
+    formatFullRow(rows[3], "Press to go back");
+  }
+}
+
+void renderWifiStatusPage(char rows[LCD_ROWS][LCD_COLS + 1])
+{
+  char ssid[21];
+  char ip[21];
+  currentSsid(ssid, sizeof(ssid));
+  ipAddressText(ip, sizeof(ip));
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    formatFullRow(rows[0], "WiFi:%.15s", ssid);
+    formatFullRow(rows[1], "IP:%s", ip);
+    formatFullRow(rows[2], "Open Web UI");
+    formatFullRow(rows[3], "Press: Back");
+  }
+  else
+  {
+    formatFullRow(rows[0], "WiFi Setup");
+    formatFullRow(rows[1], "AP:Krake-Setup");
+    formatFullRow(rows[2], "Go:%s", ip);
+    formatFullRow(rows[3], "Press: Back");
+  }
+}
+
+void showStatusLCD(AlarmLevel level, bool muted, char *msg)
+{
+  char rows[LCD_ROWS][LCD_COLS + 1];
+  for (uint8_t row = 0; row < LCD_ROWS; row++)
+  {
+    clearRowBuffer(rows[row]);
   }
 
-  lcd.print("LVL: ");
-  lcd.print(level);
-  lcd.print(" - ");
-  lcd.print(AlarmNames[level]);
-
-  int msgLineStart = 1;
-  lcd.setCursor(0, msgLineStart);
-  int len = strlen(AlarmMessageBuffer);
-  if (len < 9)
+  if (level != silent)
   {
-    if (muted)
+    lcd.backlight();
+  }
+  else
+  {
+    lcd.backlight();
+  }
+
+  alarmQueueCount = (level == silent) ? 0 : 1;
+  char cleanMsg[MAX_BUFFER_SIZE];
+  filterCopy(cleanMsg, sizeof(cleanMsg), msg);
+
+  if (lcdUiState == INFO_PAGE)
+  {
+    if (lcdPage == PAGE_WIFI_STATUS)
     {
-      lcd.print("MUTED! MSG:");
+      renderWifiStatusPage(rows);
     }
     else
     {
-      lcd.print("MSG:  ");
+      renderInfoPage(rows);
     }
-    msgLineStart = 2;
   }
-  if (strlen(AlarmMessageBuffer) == 0)
+  else if (lcdUiState == ICON_MENU && lcdPage == PAGE_WIFI)
   {
-    lcd.print("None.");
+    renderWifiPage(rows);
+  }
+  else if (lcdUiState == ICON_MENU && lcdPage == PAGE_BROKER)
+  {
+    renderBrokerPage(rows);
+  }
+  else if (lcdUiState == ICON_MENU && lcdPage == PAGE_MUTE)
+  {
+    renderMutePage(rows);
+  }
+  else if (level == silent)
+  {
+    if (lcdUiState == ALARM_ACTION_SELECT)
+    {
+      lcdUiState = MAIN_PAGE;
+    }
+    formatMain(rows[0], "Q:0");
+    formatMain(rows[1], "System OK");
+    if (currentlyMuted)
+    {
+      formatFullRow(rows[2], "Vol:%02d Mute:%lum", volumeDFPlayer, remainingMuteMinutes());
+    }
+    else
+    {
+      formatFullRow(rows[2], "Vol:%02d Mute:Off", volumeDFPlayer);
+    }
+    alarmActionSelectorActive = false;
+    if (lcdFocus == FOCUS_ALARM_ACTIONS)
+    {
+      lcdFocus = FOCUS_SETTINGS;
+    }
   }
   else
   {
-
-    char buffer[21] = {0}; // note space for terminator
-                           // filter unmeaningful characters from msg buffer
-    filter_control_chars(msg);
-
-    size_t len = strlen(msg);         // doesn't count terminator
-    size_t blen = sizeof(buffer) - 1; // doesn't count terminator
-    size_t i = 0;
-    // the actual loop that enumerates your buffer
-    for (i = 0; i < (len / blen + 1) && i + msgLineStart < 4; ++i)
+    if (alarmQueueCount > 1)
     {
-      memcpy(buffer, msg + (i * blen), blen);
-      local_ptr_to_serial->println(buffer);
-      lcd.setCursor(0, i + msgLineStart);
-      lcd.print(buffer);
+      formatMain(rows[0], "Q:+ NEXT");
+    }
+    else
+    {
+      formatMain(rows[0], "Q:1");
+    }
+
+    if (currentAlarmType[0] != '\0')
+    {
+      formatMain(rows[1], "%s %s", alarmLevelLabel(level), currentAlarmType);
+    }
+    else
+    {
+      formatMain(rows[1], "%s %s", alarmLevelLabel(level), cleanMsg);
+    }
+
+    if (currentAlarmId[0] != '\0')
+    {
+      formatMain(rows[2], "ID:%s %s", currentAlarmId, cleanMsg);
+    }
+    else
+    {
+      formatMain(rows[2], "%s", cleanMsg);
+    }
+
+    if (lcdUiState == ALARM_ACTION_SELECT)
+    {
+      if (alarmActionSelection == 0)
+      {
+        formatFullRow(rows[3], "Ack Dismiss Shelve");
+      }
+      else if (alarmActionSelection == 1)
+      {
+        formatFullRow(rows[3], "Ack Dismiss Shelve");
+      }
+      else
+      {
+        formatFullRow(rows[3], "Ack Dismiss Shelve");
+      }
+    }
+
+    if (lcdUiState == ACTION_FEEDBACK)
+    {
+      formatFullRow(rows[3], "%s", actionFeedbackText);
     }
   }
+
+  if (level == silent && lcdUiState == ACTION_FEEDBACK)
+  {
+    formatFullRow(rows[3], "%s", actionFeedbackText);
+  }
+
+  (void)muted;
+  writeStatusIcons(rows);
+  renderRows(rows);
 }
 
 // This operation is idempotent if there is no change in the abstract state.

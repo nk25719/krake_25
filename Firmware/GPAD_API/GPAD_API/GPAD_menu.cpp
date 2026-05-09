@@ -18,39 +18,43 @@ extern char currentAlarmId[11];
 extern bool running_menu;
 extern bool menu_just_exited;
 extern unsigned long muteTimeoutEndMillis;
+extern bool selectMqttBrokerOption(uint8_t index);
 
 #define LEDPIN 12
 #define MAX_DEPTH 2
+
+void reset_menu_navigation();
+
+void returnToMainPage()
+{
+  resetLcdUiToMainPage();
+  running_menu = false;
+  menu_just_exited = false;
+  requestAlarmRefresh(&Serial, false);
+  Menu::doExit();
+}
 
 result action1(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    DBG_PRINTLN(F("Yes, I will take that action #1 !"));
+    DBG_PRINTLN(F("Acknowledging alarm"));
   }
-  //char onLineMsg[32] = "Acknowledging!";
-  // publishAck(&client, onLineMsg);
   publishGPAPResponse(&client, "a", currentAlarmId);
   DBG_PRINT(F("GPAP response queued for ID: "));
   DBG_PRINTLN(currentAlarmId);
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Acknowledged!");
-  lcd.setCursor(0, 1);
-  lcd.print("Alarm still active");
+  requestAlarmRefresh(&Serial, false);
   return proceed;
 }
 result action2(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    DBG_PRINTLN(F("Yes, I will take that action #2 !"));
+    DBG_PRINTLN(F("Dismissing alarm"));
   }
   char emptyMsg[] = "";
   alarm(silent, emptyMsg, &Serial);      // sets currentLevel=0, clears AlarmMessageBuffer
   requestAlarmRefresh(&Serial);           // coalesces LCD/audio updates from loop()
-  //char onLineMsg[32] = "Dismissed!";
-  // publishAck(&client, onLineMsg);
   publishGPAPResponse(&client, "d", currentAlarmId);
   DBG_PRINT(F("GPAP response queued for ID: "));
   DBG_PRINTLN(currentAlarmId);
@@ -60,13 +64,11 @@ result action3(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    DBG_PRINTLN(F("Yes, I will take that action #3 !"));
+    DBG_PRINTLN(F("Shelving alarm"));
   }
   char emptyMsg[] = "";
   alarm(silent, emptyMsg, &Serial);
   requestAlarmRefresh(&Serial);
-  //char onLineMsg[32] = "Shelved!";
-  // publishAck(&client, onLineMsg);
   publishGPAPResponse(&client, "s", currentAlarmId);
   DBG_PRINT(F("GPAP response queued for ID: "));
   DBG_PRINTLN(currentAlarmId);
@@ -76,7 +78,7 @@ result action4(eventMask e)
 {
   if (e == eventMask::enterEvent)
   {
-    DBG_PRINTLN(F("Yes, I will take that action #3 !"));
+    DBG_PRINTLN(F("Saving volume"));
   }
   DBG_PRINT(F("volume value: "));
   DBG_PRINTLN(volumeDFPlayer);
@@ -86,9 +88,16 @@ result action4(eventMask e)
 result action5(eventMask e)
 {
   DBG_PRINTLN(F("exiting menu"));
-  running_menu = false;
-  menu_just_exited = true;
-  Menu::doExit();
+  returnToMainPage();
+  return proceed;
+}
+
+result actionBack(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
+    return quit;
+  }
   return proceed;
 }
 
@@ -153,16 +162,6 @@ result actionComSaveAndExit(eventMask e)
   setComPortFlowControl(comFlowControlIndex == 1 ? COM_FLOW_RTS_CTS : COM_FLOW_OFF);
   applyComPortConfig(&Serial);
 
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("COM saved");
-  lcd.setCursor(0, 1);
-  lcd.print(comBaudRate);
-  lcd.print(" ");
-  lcd.print(kSerialFormats[comSerialFormatIndex]);
-  lcd.setCursor(0, 2);
-  lcd.print("Flow:");
-  lcd.print(kFlowControlModes[comFlowControlIndex]);
   return quit;
 }
 
@@ -186,14 +185,81 @@ result actionMuteTimeout(eventMask e)
     DBG_PRINT(F("Mute timeout set: "));
     DBG_PRINT(muteTimeoutMinutes);
     DBG_PRINTLN(F(" min"));
+    requestAlarmRefresh(&Serial);
+  }
+  return proceed;
+}
+
+result actionMuteNow(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
     setMuteTimeoutMinutes((unsigned long)muteTimeoutMinutes);
     requestAlarmRefresh(&Serial);
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Muted for:");
-    lcd.setCursor(0, 1);
-    lcd.print(muteTimeoutMinutes);
-    lcd.print(" minute(s)");
+  }
+  return proceed;
+}
+
+result actionUnmuteNow(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
+    clearMuteTimeout();
+    setMuted(false);
+    requestAlarmRefresh(&Serial);
+  }
+  return proceed;
+}
+
+result actionWifiStatus(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
+    showWifiStatusPage();
+    running_menu = false;
+    Menu::doExit();
+  }
+  return proceed;
+}
+
+bool selectBroker(uint8_t index)
+{
+  const bool selected = selectMqttBrokerOption(index);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(selected ? "Broker selected" : "Broker failed");
+  lcd.setCursor(0, 1);
+  lcd.print(selected ? "Connecting..." : "Try again");
+  return selected;
+}
+
+result actionBrokerPublic(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
+    selectBroker(0);
+  }
+  return proceed;
+}
+
+result actionBrokerKrake(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
+    selectBroker(1);
+  }
+  return proceed;
+}
+
+result actionInfo(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
+    running_menu = false;
+    menu_just_exited = false;
+    Menu::doExit();
+    showInfoPage();
   }
   return proceed;
 }
@@ -203,25 +269,43 @@ MENU(comSetupMenu, "COM Setup", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
   FIELD(comBaudRate, "Baud Rate", "", 1200, 115200, 9600, 1, Menu::doNothing, anyEvent, noStyle),
   FIELD(comSerialFormatIndex, "Serial Format", "", 0, 0, 0, 1, Menu::doNothing, anyEvent, noStyle),
   FIELD(comFlowControlIndex, "Flow Control", "", 0, 1, 0, 1, Menu::doNothing, anyEvent, noStyle),
-  OP("Save & Exit", actionComSaveAndExit, enterEvent),
-  OP("Exit (No Save)", actionComExitNoSave, enterEvent)
+  OP("Save", actionComSaveAndExit, enterEvent),
+  OP("Back", actionComExitNoSave, enterEvent)
 );
 
-MENU(resetConfirmMenu, "Reset", Menu::doNothing, Menu::noEvent, Menu::noStyle,
-  OP("Yes - Reset", actionResetConfirm, enterEvent),
-  OP("No  - Cancel", Menu::doNothing, Menu::noEvent)
+MENU(resetConfirmMenu, "Reset Device", Menu::doNothing, Menu::noEvent, Menu::noStyle,
+  OP("Confirm Reset", actionResetConfirm, enterEvent),
+  OP("Back", actionBack, enterEvent)
+);
+
+MENU(wifiMenu, "WiFi", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
+  OP("Status / Web UI", actionWifiStatus, enterEvent),
+  OP("Back", actionBack, enterEvent)
+);
+
+MENU(brokerMenu, "Broker", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
+  OP("Krake PubInv", actionBrokerKrake, enterEvent),
+  OP("Public Shiftr", actionBrokerPublic, enterEvent),
+  OP("Back", actionBack, enterEvent)
+);
+
+MENU(muteMenu, "Mute Duration", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
+  FIELD(muteTimeoutMinutes, "Set Duration", "min", 1, 60, 5, 1, actionMuteTimeout, enterEvent, wrapStyle),
+  OP("Mute Now", actionMuteNow, enterEvent),
+  OP("Unmute", actionUnmuteNow, enterEvent),
+  OP("Back", actionBack, enterEvent)
 );
 
 
-MENU(mainMenu, "Krake Menu", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
-  OP("Acknowledge", action1, enterEvent),
-  OP("Dismiss", action2, enterEvent),
-  OP("Shelve", action3, enterEvent),
-  FIELD(volumeDFPlayer, "Volume", "%", 0, 30, 10, 1, action4, anyEvent, wrapStyle),
-  FIELD(muteTimeoutMinutes, "Mute Time", "min", 1, 60, 5, 1, actionMuteTimeout, enterEvent, wrapStyle),
+MENU(mainMenu, "Settings", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
+  OP("Info", actionInfo, enterEvent),
+  SUBMENU(wifiMenu),
+  SUBMENU(brokerMenu),
+  FIELD(volumeDFPlayer, "Volume", "%", 1, 30, 20, 1, action4, enterEvent, wrapStyle),
+  SUBMENU(muteMenu),
   SUBMENU(comSetupMenu),
   SUBMENU(resetConfirmMenu),
-  OP("Exit Menu", action5, enterEvent)
+  OP("Back", action5, enterEvent)
 );
 
 RotaryEventIn reIn(
@@ -248,11 +332,8 @@ void registerRotationEvent(bool CW)
 {
   DBG_PRINT(F("CW: "));
   DBG_PRINTLN(CW);
-  // Note: Rob believes it is more "natural" for clockwise to mean "up".
-  // Apparently, whoever wrote the "MENU_INPUTS" believes the opposite,
-  // so I am changing this hear to reverse the sense.
-  reIn.registerEvent(CW ? RotaryEventIn::EventType::ROTARY_CCW
-                        : RotaryEventIn::EventType::ROTARY_CW);
+  reIn.registerEvent(CW ? RotaryEventIn::EventType::ROTARY_CW
+                        : RotaryEventIn::EventType::ROTARY_CCW);
 }
 
 void registerRotaryEncoderPress()
@@ -275,13 +356,35 @@ void poll_GPAD_menu()
 
 void navigate_to_n_and_execute(int n)
 {
-  DBG_PRINTLN(F("moving to zero and executing!"));
-  nav.doNav(navCmd(idxCmd, n)); // hilite second option
-  // nav.doNav(navCmd(enterCmd)); //execute option
+  nav.doNav(navCmd(idxCmd, n));
+}
+
+void open_settings_menu_at(int n)
+{
+  reset_menu_navigation();
+  navigate_to_n_and_execute(n);
 }
 
 void reset_menu_navigation()
 {
   running_menu = true;
   nav.reset();
+}
+
+void executeAlarmAction(uint8_t actionIndex)
+{
+  switch (actionIndex)
+  {
+  case 0:
+    action1(eventMask::enterEvent);
+    break;
+  case 1:
+    action2(eventMask::enterEvent);
+    break;
+  case 2:
+    action3(eventMask::enterEvent);
+    break;
+  default:
+    break;
+  }
 }

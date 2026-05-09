@@ -20,7 +20,7 @@
     const password = getInputValue('password');
     if (!ssid) return KrakeUI.showMessage('SSID is required.', true);
     if (!password || !password.trim()) return KrakeUI.showMessage('Password is required.', true);
-    try { await KrakeUI.postForm('/wifi', { ssid, password }); KrakeUI.showMessage('WiFi credentials saved. Device will retry all saved networks on boot.'); await loadWifi(); }
+    try { await KrakeUI.postForm('/wifi', { ssid, password }); KrakeUI.showMessage('WiFi credentials saved. Restart or reconnect KRAKE to apply the new network.'); await loadWifi(); }
     catch (e) { KrakeUI.showMessage('Failed to save WiFi: ' + e.message, true); }
   }
   async function refreshSettings() {
