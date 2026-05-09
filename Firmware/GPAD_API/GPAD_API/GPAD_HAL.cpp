@@ -26,6 +26,7 @@
 #include "WiFiManagerOTA.h"
 #include "GPAD_menu.h"
 #include "mqtt_handler.h"
+#include "debug_macros.h"
 #include <esp_system.h>
 #include <Preferences.h>
 #include <driver/uart.h>
@@ -229,6 +230,7 @@ namespace
 
   bool alarmUiUpdatePending = false;
   bool alarmAudioUpdatePending = false;
+  AlarmLevel pendingAlarmAudioLevel = silent;
   unsigned long lastAlarmUiRequestMs = 0;
   unsigned long lastAlarmUiUpdateMs = 0;
   unsigned long lastAlarmAudioUpdateMs = 0;
@@ -240,6 +242,7 @@ namespace
     if (includeAudio)
     {
       alarmAudioUpdatePending = true;
+      pendingAlarmAudioLevel = currentLevel;
     }
     lastAlarmUiRequestMs = millis();
     if (alarmUiPendingRequestCount < 255)
@@ -278,7 +281,7 @@ byte received_signal_raw_bytes[MAX_BUFFER_SIZE];
 // #define DEBUG 1
 
 #if (DEBUG > 0)
-Serial.println("Debug defined >0")
+Serial.println("Debug defined >0");
 #endif
 
 void setup_spi()
@@ -369,7 +372,7 @@ void updateFromSPI()
     int prevLevel = alarm((AlarmLevel)event.lvl, event.msg, &Serial);
     if (prevLevel != event.lvl)
     {
-      annunciateAlarmLevel(&Serial);
+      requestAlarmRefresh(&Serial);
     }
     else
     {
@@ -409,23 +412,23 @@ void encoderSwitchCallback(byte buttonEvent)
     // onLongPress is indidcated when you hold onto the button
   // more than longPressTime in milliseconds
   case onLongPress:
-    Serial.print("ENCODER_SWITCH Button Long Pressed For ");
-    Serial.print(longPressTime);
-    Serial.println("ms");
+    DBG_PRINT(F("ENCODER_SWITCH Button Long Pressed For "));
+    DBG_PRINT(longPressTime);
+    DBG_PRINTLN(F("ms"));
     break;
 
   // onMultiHit is indicated when you hit the button
   // multiHitTarget times within multihitTime in milliseconds
   case onMultiHit:
-    Serial.print("Encoder Switch Button Pressed ");
-    Serial.print(multiHitTarget);
-    Serial.print(" times in ");
-    Serial.print(multiHitTime);
-    Serial.println("ms");
+    DBG_PRINT(F("Encoder Switch Button Pressed "));
+    DBG_PRINT(multiHitTarget);
+    DBG_PRINT(F(" times in "));
+    DBG_PRINT(multiHitTime);
+    DBG_PRINTLN(F("ms"));
     break;
   default:
-    Serial.print("Encoder Switch buttonEvent but not reckognized case: ");
-    Serial.println(buttonEvent);
+    DBG_PRINT(F("Encoder Switch buttonEvent but not recognized case: "));
+    DBG_PRINTLN(buttonEvent);
     break;
   }
 }
@@ -454,7 +457,7 @@ void muteButtonCallback(byte buttonEvent)
       
     }
     start_of_song = millis();
-    annunciateAlarmLevel(local_ptr_to_serial);
+    requestAlarmRefresh(local_ptr_to_serial);
     printAlarmState(local_ptr_to_serial);
     break;
   case onRelease:
@@ -468,23 +471,23 @@ void muteButtonCallback(byte buttonEvent)
     // onLongPress is indidcated when you hold onto the button
   // more than longPressTime in milliseconds
   case onLongPress:
-    Serial.print("SWITCH_MUTE Long Pressed For ");
-    Serial.print(longPressTime);
-    Serial.println("ms");
+    DBG_PRINT(F("SWITCH_MUTE Long Pressed For "));
+    DBG_PRINT(longPressTime);
+    DBG_PRINTLN(F("ms"));
     break;
 
   // onMultiHit is indicated when you hit the button
   // multiHitTarget times within multihitTime in milliseconds
   case onMultiHit:
-    Serial.print("Button Pressed ");
-    Serial.print(multiHitTarget);
-    Serial.print(" times in ");
-    Serial.print(multiHitTime);
-    Serial.println("ms");
+    DBG_PRINT(F("Button Pressed "));
+    DBG_PRINT(multiHitTarget);
+    DBG_PRINT(F(" times in "));
+    DBG_PRINT(multiHitTime);
+    DBG_PRINTLN(F("ms"));
     break;
   default:
-    Serial.print("Mute buttonEvent but not reckognized case: ");
-    Serial.println(buttonEvent);
+    DBG_PRINT(F("Mute buttonEvent but not recognized case: "));
+    DBG_PRINTLN(buttonEvent);
     break;
   }
 }
@@ -815,7 +818,7 @@ void muteTimeoutWatchdog(Stream *serialport)
   if (isMuted() && serviceMuteTimeout())
   {
     serialport->println(F("Mute timeout expired. Auto-unmuting."));
-    annunciateAlarmLevel(serialport);
+    requestAlarmRefresh(serialport);
   }
 }
 
@@ -868,7 +871,9 @@ void serviceAlarmUiAudio(Stream *serialport)
     alarmAudioUpdatePending = false;
     lastAlarmAudioUpdateMs = now;
 
-    if (currentLevel <= 0)
+    const AlarmLevel audioLevel = pendingAlarmAudioLevel;
+
+    if (audioLevel <= 0)
     {
       serialport->println(F("Silent level: skipping DFPlayer playback."));
     }
@@ -879,8 +884,8 @@ void serviceAlarmUiAudio(Stream *serialport)
     else
     {
       serialport->println(F("dfPlayer.play"));
-      serialport->println(currentLevel);
-      playNotBusyLevel(currentLevel);
+      serialport->println(audioLevel);
+      playNotBusyLevel(audioLevel);
     }
   }
 }
@@ -1100,6 +1105,17 @@ void restoreAlarmLevel(Stream *serialport)
   }
 
   markAlarmUiAudioPending(false);
+}
+
+void requestAlarmRefresh(Stream *serialport, bool includeAudio)
+{
+  if (serialport == nullptr)
+  {
+    return;
+  }
+
+  start_of_song = millis();
+  markAlarmUiAudioPending(includeAudio);
 }
 
 void annunciateAlarmLevel(Stream *serialport)
