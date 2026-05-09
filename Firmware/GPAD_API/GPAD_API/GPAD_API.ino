@@ -1799,8 +1799,7 @@ void setup()
 
   initRotator();
   debugSerial.println(F("initRotator"));
-  IPAddress splashAddress = wifiManager.getAddress();
-  splashLCD(wifiManager.getMode(), splashAddress);
+  splashLCD(wifiManager.getMode(), wifiManager.getAddress());
 
   debugSerial.println(F("splashLCD"));
 

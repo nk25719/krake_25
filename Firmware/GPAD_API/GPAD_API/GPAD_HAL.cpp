@@ -803,7 +803,7 @@ void clearLCD(void)
 }
 
 // Splash a message so we can tell the LCD is working
-void splashLCD(wifi_mode_t wifiMode, IPAddress &deviceIp)
+void splashLCD(wifi_mode_t wifiMode, const IPAddress &deviceIp)
 {
   lcd.init(); // initialize the lcd
   // Print a message to the LCD.
