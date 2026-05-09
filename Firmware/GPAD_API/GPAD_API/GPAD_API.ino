@@ -1819,10 +1819,9 @@ void setup()
 bool running_menu = false;
 bool menu_just_exited = false;
 
-void loop()
+void serviceMqttClient()
 {
 #if defined HMWK || defined KRAKE
-
   if (client.connected())
   {
     if (!client.loop())
@@ -1837,7 +1836,12 @@ void loop()
   {
     reconnect();
   }
+#endif
+}
 
+void serviceDeferredReset()
+{
+#if defined HMWK || defined KRAKE
   if (wifiResetRequestedAtMs != 0 && (millis() - wifiResetRequestedAtMs) > 750)
   {
     debugSerial.println(F("Resetting WiFi credentials and restarting."));
@@ -1850,25 +1854,35 @@ void loop()
     delay(150);
     ESP.restart();
   }
-
-  publishOnLineMsg();
-  wink(); // The builtin LED
 #endif
+}
 
+void loop()
+{
+  // MQTT gets the first and most frequent slices so inbound bursts are drained
+  // before comparatively slow LCD/menu/audio work is serviced.
+  serviceMqttClient();
+  serviceDeferredReset();
+
+  // Hardware/UI runs after MQTT.  LCD redraws and DFPlayer commands are
+  // scheduled/throttled inside GPAD_HAL_loop() so this remains a short slice.
   unchanged_anunicateAlarmLevel(&debugSerial);
-  // delay(20);
   GPAD_HAL_loop();
+  serviceMqttClient();
 
   processSerial(&debugSerial, &debugSerial, &client);
+  serviceMqttClient();
 
   // Here we also process the UART1 using the same routine.
   processSerial(&debugSerial, &uartSerial1, &client);
+  serviceMqttClient();
 
   // Here we will listen for an SPI command...
 
   // // Now try to read from the SPI Port!
 #if defined(GPAD)
   updateFromSPI();
+  serviceMqttClient();
 #endif
 
   updateRotator();
@@ -1886,5 +1900,11 @@ void loop()
     poll_GPAD_menu();
   }
 
-  delay(1);
+#if defined HMWK || defined KRAKE
+  publishOnLineMsg();
+  wink(); // The builtin LED
+#endif
+
+  serviceMqttClient();
+  yield();
 }
