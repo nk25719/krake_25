@@ -4,7 +4,7 @@ cpp_defines = [
     ("COMPANY_NAME", "PubInv "),   # For the Broker ID for MQTT 
     ("PROG_NAME", "GPAD_API "),    # This program
     ("FIRMWARE_VERSION", "0.57 "), # Refactored so that MQTT is serviced first.
-    ("LittleFS_VERSION", "0.1.6 "), # pr 501
+    ("LittleFS_VERSION", "0.1.7 "), # pr 501
     ("MODEL_NAME", "KRAKE_"), 
     ("LICENSE", "GNU Affero General Public License, version 3 "),
     ("ORIGIN", "US"),
