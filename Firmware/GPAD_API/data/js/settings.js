@@ -20,7 +20,7 @@
     const password = getInputValue('password');
     if (!ssid) return KrakeUI.showMessage('SSID is required.', true);
     if (!password || !password.trim()) return KrakeUI.showMessage('Password is required.', true);
-    try { await KrakeUI.postForm('/wifi', { ssid, password }); KrakeUI.showMessage('WiFi credentials saved. Restart or reconnect KRAKE to apply the new network.'); await loadWifi(); }
+    try { await KrakeUI.postForm('/wifi', { ssid, password }); KrakeUI.showMessage('WiFi credentials saved. Device will retry all saved networks on boot.'); await loadWifi(); }
     catch (e) { KrakeUI.showMessage('Failed to save WiFi: ' + e.message, true); }
   }
   async function refreshSettings() {
@@ -34,22 +34,6 @@
     KrakeUI.setText('muteStatus', data.muted ? 'Muted' : 'Unmuted');
     KrakeUI.setText('alarmTopic', data.publishTopic || '-');
     KrakeUI.setText('ackTopic', data.subscribeTopic || '-');
-    renderBrokerOptions(data.brokerOptions || []);
-  }
-  function renderBrokerOptions(options) {
-    const node = KrakeUI.byId('brokerOptions');
-    if (!node) return;
-    if (!options.length) {
-      node.textContent = '-';
-      return;
-    }
-    node.innerHTML = '';
-    options.forEach(option => {
-      const row = document.createElement('div');
-      const active = option.active ? 'active' : 'saved';
-      row.textContent = `${option.index}. ${option.name} (${active}) - ${option.host}:${option.port} user=${option.username || '-'} pass=${option.password || '-'} - ${option.notes || ''}`;
-      node.appendChild(row);
-    });
   }
   async function resetWifi() {
     if (!confirm('This will clear WiFi credentials and restart KRAKE. Continue?')) return;
