@@ -245,6 +245,7 @@ namespace
   const uint8_t ICON_VOLUME = 3;
   const uint8_t ICON_MUTE = 4;
   const uint8_t ICON_SETTINGS = 5;
+  const uint8_t ALARM_ACTION_COUNT = 4;
   const unsigned long LCD_RENDER_MIN_INTERVAL_MS = 150;
   const unsigned long LCD_SCROLL_STEP_MS = 400;
   const unsigned long LCD_SCROLL_PAUSE_MS = 1500;
@@ -682,7 +683,7 @@ namespace
     {
       if (lcdUiState == ALARM_ACTION_SELECT)
       {
-        const uint8_t actionCols[3] = {0, 5, 12};
+        const uint8_t actionCols[ALARM_ACTION_COUNT] = {0, 5, 9, 13};
         setLcdCursorMode(true, actionCols[alarmActionSelection], 3);
       }
       else if (lcdUiState == MAIN_PAGE)
@@ -1529,20 +1530,23 @@ void showWifiStatusPage()
 void executeSelectedAlarmAction()
 {
   const uint8_t selectedAction = alarmActionSelection;
-  const uint8_t actionIndex = (selectedAction == 1) ? 2 : (selectedAction == 2 ? 1 : 0);
+  const uint8_t actionIndex = (selectedAction == 0) ? 2 : (selectedAction == 1 ? 0 : (selectedAction == 2 ? 1 : 3));
   alarmActionSelection = 0;
   alarmActionSelectorActive = false;
   executeAlarmAction(actionIndex);
   switch (selectedAction)
   {
   case 0:
-    showActionFeedback("Alarm acknowledged");
+    showActionFeedback("Alarm shelved");
     break;
   case 1:
-    showActionFeedback("Alarm shelved");
+    showActionFeedback("Alarm acknowledged");
     break;
   case 2:
     showActionFeedback("Alarm dismissed");
+    break;
+  case 3:
+    showActionFeedback("Alarm completed");
     break;
   default:
     break;
@@ -1590,7 +1594,7 @@ bool alarmActionSelectorHandleRotation(bool clockwise)
     }
     if (clockwise)
     {
-      if (alarmActionSelection >= 2)
+      if (alarmActionSelection >= (ALARM_ACTION_COUNT - 1))
       {
         alarmActionSelectorActive = false;
         iconFocusActive = true;
@@ -2061,7 +2065,7 @@ void showStatusLCD(AlarmLevel level, bool muted, char *msg)
 
     if (lcdUiState == ALARM_ACTION_SELECT)
     {
-      formatFullRow(rows[3], "Ack  Shelve Dismiss");
+      formatFullRow(rows[3], "SHLV ACK DIS CMP");
     }
 
     if (lcdUiState == ACTION_FEEDBACK)
@@ -2155,6 +2159,10 @@ void showMainLcdFrameNow(Stream *serialport)
   alarmUiUpdatePending = false;
   alarmUiPendingRequestCount = 0;
   lastAlarmUiUpdateMs = millis();
+  for (uint8_t row = 0; row < LCD_ROWS; row++)
+  {
+    previousLcdRows[row][0] = '\0';
+  }
   showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
 }
 

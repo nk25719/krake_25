@@ -91,13 +91,27 @@ result action4(eventMask e)
   setVolume(volumeDFPlayer);
   return proceed;
 }
+// result action5(eventMask e)
+// {
+//   if (e & eventMask::enterEvent)
+//   {
+//     DBG_PRINTLN(F("exiting menu"));
+//     returnToMainPage();
+//     return proceed;
+//   }
+//   return proceed;
+// }
 result action5(eventMask e)
 {
   if (e & eventMask::enterEvent)
   {
-    DBG_PRINTLN(F("exiting menu"));
-    returnToMainPage();
-    return proceed;
+    DBG_PRINTLN(F("Completing alarm"));
+    char emptyMsg[] = "";
+    alarm(silent, emptyMsg, &Serial);
+    requestAlarmRefresh(&Serial);
+    publishGPAPResponse(&client, "c", currentAlarmId);
+    DBG_PRINT(F("GPAP response queued for ID: "));
+    DBG_PRINTLN(currentAlarmId);
   }
   return proceed;
 }
@@ -110,6 +124,15 @@ result actionBack(eventMask e)
     lcd.noCursor();
     requestAlarmRefresh(&Serial, false);
     return quit;
+  }
+  return proceed;
+}
+
+result actionSettingsBack(eventMask e)
+{
+  if (e & eventMask::enterEvent)
+  {
+    returnToMainPage();
   }
   return proceed;
 }
@@ -321,7 +344,7 @@ MENU(mainMenu, "Settings", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
   SUBMENU(muteMenu),
   SUBMENU(comSetupMenu),
   SUBMENU(resetConfirmMenu),
-  OP("Back", action5, enterEvent)
+  OP("Back", actionSettingsBack, enterEvent)
 );
 
 RotaryEventIn reIn(
@@ -420,6 +443,9 @@ void executeAlarmAction(uint8_t actionIndex)
     break;
   case 2:
     action3(eventMask::enterEvent);
+    break;
+  case 3:
+    action5(eventMask::enterEvent);
     break;
   default:
     break;
