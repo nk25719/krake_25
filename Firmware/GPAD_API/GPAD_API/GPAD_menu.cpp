@@ -23,15 +23,21 @@ extern bool selectMqttBrokerOption(uint8_t index);
 #define LEDPIN 12
 #define MAX_DEPTH 2
 
+static bool settingsExitRequested = false;
+
 void reset_menu_navigation();
+static void finishReturnToMainPage();
 
 void returnToMainPage()
 {
-  resetLcdUiToMainPage();
-  running_menu = false;
-  menu_just_exited = false;
-  requestAlarmRefresh(&Serial, false);
-  Menu::doExit();
+  if (running_menu)
+  {
+    settingsExitRequested = true;
+    requestAlarmRefresh(&Serial, false);
+    return;
+  }
+
+  finishReturnToMainPage();
 }
 
 result action1(eventMask e)
@@ -87,15 +93,22 @@ result action4(eventMask e)
 }
 result action5(eventMask e)
 {
-  DBG_PRINTLN(F("exiting menu"));
-  returnToMainPage();
+  if (e & eventMask::enterEvent)
+  {
+    DBG_PRINTLN(F("exiting menu"));
+    returnToMainPage();
+    return proceed;
+  }
   return proceed;
 }
 
 result actionBack(eventMask e)
 {
-  if (e == eventMask::enterEvent)
+  if (e & eventMask::enterEvent)
   {
+    lcd.noBlink();
+    lcd.noCursor();
+    requestAlarmRefresh(&Serial, false);
     return quit;
   }
   return proceed;
@@ -167,12 +180,15 @@ result actionComSaveAndExit(eventMask e)
 
 result actionComExitNoSave(eventMask e)
 {
-  if (e == eventMask::enterEvent)
+  if (e & eventMask::enterEvent)
   {
     const ComPortConfig &cfg = getComPortConfig();
     comBaudRate = static_cast<int>(cfg.baudRate);
     comSerialFormatIndex = static_cast<int>(cfg.serialFormatIndex);
     comFlowControlIndex = (cfg.flowControl == COM_FLOW_RTS_CTS) ? 1 : 0;
+    lcd.noBlink();
+    lcd.noCursor();
+    requestAlarmRefresh(&Serial, false);
     return quit;
   }
   return proceed;
@@ -225,12 +241,12 @@ result actionWifiStatus(eventMask e)
 bool selectBroker(uint8_t index)
 {
   const bool selected = selectMqttBrokerOption(index);
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print(selected ? "Broker selected" : "Broker failed");
-  lcd.setCursor(0, 1);
-  lcd.print(selected ? "Connecting..." : "Try again");
+  running_menu = false;
+  menu_just_exited = false;
+  Menu::doExit();
+  resetLcdUiToMainPage();
+  showActionFeedback(selected ? "Broker selected" : "Broker failed");
+  requestAlarmRefresh(&Serial, false);
   return selected;
 }
 
@@ -284,8 +300,8 @@ MENU(wifiMenu, "WiFi", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
 );
 
 MENU(brokerMenu, "Broker", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
-  OP("Krake PubInv", actionBrokerKrake, enterEvent),
-  OP("Public Shiftr", actionBrokerPublic, enterEvent),
+  OP("1 Public Shiftr", actionBrokerPublic, enterEvent),
+  OP("2 Krake PubInv", actionBrokerKrake, enterEvent),
   OP("Back", actionBack, enterEvent)
 );
 
@@ -352,6 +368,27 @@ void setup_GPAD_menu()
 void poll_GPAD_menu()
 {
   nav.poll();
+  if (settingsExitRequested)
+  {
+    finishReturnToMainPage();
+    return;
+  }
+  if (running_menu)
+  {
+    drawLcdStatusIconsNow();
+  }
+}
+
+static void finishReturnToMainPage()
+{
+  settingsExitRequested = false;
+  nav.reset();
+  running_menu = false;
+  menu_just_exited = false;
+  resetLcdUiToMainPage();
+  lcd.noBlink();
+  lcd.noCursor();
+  showMainLcdFrameNow(&Serial);
 }
 
 void navigate_to_n_and_execute(int n)

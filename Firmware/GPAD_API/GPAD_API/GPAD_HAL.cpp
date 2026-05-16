@@ -183,6 +183,7 @@ extern uint8_t selectedBrokerIndex;
 extern uint8_t activeBrokerIndex;
 extern uint8_t mqttFailCount;
 extern const char *mqttStateDescription(int state);
+extern bool selectMqttBrokerOption(uint8_t index);
  
 // For LCD
 //  #include <LiquidCrystal_I2C.h>
@@ -241,7 +242,6 @@ namespace
   const uint8_t LCD_MAIN_WIDTH = LCD_STATUS_COL;
   const uint8_t LCD_ALARM_WINDOW_WIDTH = LCD_COLS * 2;
   const uint8_t ICON_WIFI = 1;
-  const uint8_t ICON_BROKER = 2;
   const uint8_t ICON_VOLUME = 3;
   const uint8_t ICON_MUTE = 4;
   const uint8_t ICON_SETTINGS = 5;
@@ -265,6 +265,7 @@ namespace
   size_t scrollIndex = 0;
   unsigned long lastScrollMs = 0;
   bool scrollEnabled = false;
+  bool iconFocusActive = false;
   enum LcdFocus : uint8_t
   {
     FOCUS_ALARM_ACTIONS = 0,
@@ -350,7 +351,7 @@ namespace
     case PAGE_WIFI:
       return 1;
     case PAGE_BROKER:
-      return 2;
+      return 3;
     case PAGE_MUTE:
       return 3;
     case PAGE_MAIN:
@@ -366,7 +367,7 @@ namespace
     uint8_t value = static_cast<uint8_t>(focus);
     if (value < minFocus || value > maxFocus)
     {
-      value = alarmIsActive() ? FOCUS_ALARM_ACTIONS : FOCUS_SETTINGS;
+      value = alarmIsActive() ? FOCUS_ALARM_ACTIONS : FOCUS_WIFI;
     }
 
     if (clockwise)
@@ -526,6 +527,61 @@ namespace
     dest[out] = '\0';
   }
 
+  void setLcdCursorMode(bool enabled, uint8_t col = 19, uint8_t row = 0)
+  {
+    if (enabled)
+    {
+      lcd.setCursor(col, row);
+      lcd.cursor();
+      lcd.blink();
+    }
+    else
+    {
+      lcd.noBlink();
+      lcd.noCursor();
+    }
+  }
+
+  uint8_t wifiStatusIcon()
+  {
+    const wifi_mode_t mode = WiFi.getMode();
+    if (mode == WIFI_AP || mode == WIFI_AP_STA)
+    {
+      return 'A';
+    }
+    return (WiFi.status() == WL_CONNECTED) ? ICON_WIFI : '_';
+  }
+
+  uint8_t brokerStatusIcon()
+  {
+    if (client.connected())
+    {
+      return 'B';
+    }
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      return '_';
+    }
+    return (mqttFailCount > 0 || activeBrokerIndex != selectedBrokerIndex) ? '?' : '_';
+  }
+
+  uint8_t volumeStatusIcon()
+  {
+    return currentlyMuted ? ICON_MUTE : ICON_VOLUME;
+  }
+
+  void writeStatusIcon(uint8_t value)
+  {
+    if (value < 8)
+    {
+      lcd.write(value);
+    }
+    else
+    {
+      lcd.print(static_cast<char>(value));
+    }
+  }
+
   void installLcdIcons()
   {
     byte wifiIcon[8] = {
@@ -536,16 +592,6 @@ namespace
         B01010,
         B00000,
         B00100,
-        B00000,
-    };
-    byte brokerIcon[8] = {
-        B11111,
-        B10001,
-        B10101,
-        B10001,
-        B10101,
-        B10001,
-        B11111,
         B00000,
     };
     byte volumeIcon[8] = {
@@ -580,7 +626,6 @@ namespace
     };
 
     Real_lcd.createChar(ICON_WIFI, wifiIcon);
-    Real_lcd.createChar(ICON_BROKER, brokerIcon);
     Real_lcd.createChar(ICON_VOLUME, volumeIcon);
     Real_lcd.createChar(ICON_MUTE, muteIcon);
     Real_lcd.createChar(ICON_SETTINGS, settingsIcon);
@@ -588,9 +633,9 @@ namespace
 
   void writeStatusIcons(char rows[LCD_ROWS][LCD_COLS + 1])
   {
-    rows[0][LCD_STATUS_COL] = ICON_WIFI;
-    rows[0][LCD_STATUS_COL + 1] = ICON_BROKER;
-    rows[0][LCD_STATUS_COL + 2] = currentlyMuted ? ICON_MUTE : ICON_VOLUME;
+    rows[0][LCD_STATUS_COL] = wifiStatusIcon();
+    rows[0][LCD_STATUS_COL + 1] = brokerStatusIcon();
+    rows[0][LCD_STATUS_COL + 2] = volumeStatusIcon();
     rows[0][LCD_STATUS_COL + 3] = ICON_SETTINGS;
 
     // The compact status cluster lives on row 0; lower rows keep all 20 cells
@@ -632,32 +677,42 @@ namespace
       lastLcdRenderMs = now;
     }
 
-    lcd.noBlink();
-    lcd.noCursor();
+    setLcdCursorMode(false);
     if (!running_menu)
     {
       if (lcdUiState == ALARM_ACTION_SELECT)
       {
-        const uint8_t actionCols[3] = {0, 4, 12};
-        lcd.setCursor(actionCols[alarmActionSelection], 3);
-        lcd.cursor();
-        lcd.blink();
+        const uint8_t actionCols[3] = {0, 5, 12};
+        setLcdCursorMode(true, actionCols[alarmActionSelection], 3);
       }
       else if (lcdUiState == MAIN_PAGE)
       {
-        if (lcdFocus >= FOCUS_WIFI && lcdFocus <= FOCUS_SETTINGS)
+        if (iconFocusActive && lcdFocus >= FOCUS_WIFI && lcdFocus <= FOCUS_SETTINGS)
         {
-          lcd.setCursor(LCD_STATUS_COL + static_cast<uint8_t>(lcdFocus) - FOCUS_WIFI, 0);
-          lcd.cursor();
-          lcd.blink();
+          setLcdCursorMode(true, LCD_STATUS_COL + static_cast<uint8_t>(lcdFocus) - FOCUS_WIFI, 0);
         }
       }
       else if (lcdUiState == ICON_MENU)
       {
-        const uint8_t optionRow = (lcdPageOption + 2 >= LCD_ROWS) ? (LCD_ROWS - 1) : (lcdPageOption + 2);
-        lcd.setCursor(0, optionRow);
-        lcd.cursor();
-        lcd.blink();
+        uint8_t optionCol = 0;
+        uint8_t optionRow = 2;
+        if (lcdPage == PAGE_WIFI)
+        {
+          optionRow = 3;
+        }
+        else if (lcdPage == PAGE_BROKER)
+        {
+          optionRow = (lcdPageOption == 0) ? 1 : (lcdPageOption == 1 ? 2 : 3);
+        }
+        else if (lcdPage == PAGE_MUTE)
+        {
+          optionRow = (lcdPageOption == 0) ? 2 : 3;
+          if (lcdPageOption == 2)
+          {
+            optionCol = currentlyMuted ? 9 : 11;
+          }
+        }
+        setLcdCursorMode(true, optionCol, optionRow);
       }
     }
     lcdDirty = false;
@@ -1388,11 +1443,30 @@ const char *lcdUiStateName()
   }
 }
 
+void drawLcdStatusIconsNow()
+{
+#if ENABLE_LCD_UI
+  lcd.setCursor(LCD_STATUS_COL, 0);
+  writeStatusIcon(wifiStatusIcon());
+  writeStatusIcon(brokerStatusIcon());
+  writeStatusIcon(volumeStatusIcon());
+  lcd.write(static_cast<uint8_t>(ICON_SETTINGS));
+  lcd.noBlink();
+  lcd.noCursor();
+#endif
+}
+
+void noteLcdQueueMessageReceived()
+{
+  markLcdDirty();
+}
+
 void resetLcdUiToMainPage()
 {
   lcdPage = PAGE_MAIN;
   lcdPageOption = 0;
   alarmActionSelectorActive = false;
+  iconFocusActive = false;
   actionFeedbackText[0] = '\0';
   if (alarmIsActive())
   {
@@ -1401,7 +1475,7 @@ void resetLcdUiToMainPage()
   }
   else
   {
-    lcdFocus = FOCUS_SETTINGS;
+    lcdFocus = FOCUS_WIFI;
   }
   setLcdUiState(MAIN_PAGE);
 }
@@ -1414,6 +1488,7 @@ void showAlarmActions()
   }
   lcdPage = PAGE_MAIN;
   alarmActionSelectorActive = true;
+  iconFocusActive = false;
   lcdFocus = FOCUS_ALARM_ACTIONS;
   if (lcdUiState != ALARM_ACTION_SELECT)
   {
@@ -1427,6 +1502,7 @@ void showActionFeedback(const char *msg)
   snprintf(actionFeedbackText, sizeof(actionFeedbackText), "%s", msg != nullptr ? msg : "");
   actionFeedbackStartMs = millis();
   alarmActionSelectorActive = false;
+  iconFocusActive = false;
   setLcdUiState(ACTION_FEEDBACK);
 }
 
@@ -1435,6 +1511,7 @@ void showInfoPage()
   lcdPage = PAGE_INFO;
   lcdPageOption = 0;
   alarmActionSelectorActive = false;
+  iconFocusActive = false;
   setLcdUiState(INFO_PAGE);
   requestAlarmRefresh(local_ptr_to_serial, false);
 }
@@ -1444,6 +1521,7 @@ void showWifiStatusPage()
   lcdPage = PAGE_WIFI_STATUS;
   lcdPageOption = 0;
   alarmActionSelectorActive = false;
+  iconFocusActive = false;
   setLcdUiState(INFO_PAGE);
   requestAlarmRefresh(local_ptr_to_serial, false);
 }
@@ -1451,19 +1529,20 @@ void showWifiStatusPage()
 void executeSelectedAlarmAction()
 {
   const uint8_t selectedAction = alarmActionSelection;
+  const uint8_t actionIndex = (selectedAction == 1) ? 2 : (selectedAction == 2 ? 1 : 0);
   alarmActionSelection = 0;
   alarmActionSelectorActive = false;
-  executeAlarmAction(selectedAction);
+  executeAlarmAction(actionIndex);
   switch (selectedAction)
   {
   case 0:
     showActionFeedback("Alarm acknowledged");
     break;
   case 1:
-    showActionFeedback("Alarm dismissed");
+    showActionFeedback("Alarm shelved");
     break;
   case 2:
-    showActionFeedback("Alarm shelved");
+    showActionFeedback("Alarm dismissed");
     break;
   default:
     break;
@@ -1495,6 +1574,7 @@ bool alarmActionSelectorHandleRotation(bool clockwise)
   {
     if (lcdUiState == MAIN_PAGE && lcdFocus >= FOCUS_WIFI && lcdFocus <= FOCUS_SETTINGS)
     {
+      iconFocusActive = true;
       lcdFocus = nextFocus(lcdFocus, clockwise);
       markLcdDirty();
       requestAlarmRefresh(local_ptr_to_serial, false);
@@ -1513,6 +1593,7 @@ bool alarmActionSelectorHandleRotation(bool clockwise)
       if (alarmActionSelection >= 2)
       {
         alarmActionSelectorActive = false;
+        iconFocusActive = true;
         lcdFocus = FOCUS_WIFI;
         setLcdUiState(MAIN_PAGE);
       }
@@ -1526,6 +1607,7 @@ bool alarmActionSelectorHandleRotation(bool clockwise)
       if (alarmActionSelection == 0)
       {
         alarmActionSelectorActive = false;
+        iconFocusActive = true;
         lcdFocus = FOCUS_SETTINGS;
         setLcdUiState(MAIN_PAGE);
       }
@@ -1542,6 +1624,7 @@ bool alarmActionSelectorHandleRotation(bool clockwise)
   if (currentLevel == silent)
   {
     lcdFocus = nextFocus(lcdFocus, clockwise);
+    iconFocusActive = true;
     alarmActionSelectorActive = false;
     markLcdDirty();
     requestAlarmRefresh(local_ptr_to_serial, false);
@@ -1555,15 +1638,13 @@ bool alarmActionSelectorHandlePress()
 {
   if (lcdUiState == INFO_PAGE)
   {
-    resetLcdUiToMainPage();
-    requestAlarmRefresh(local_ptr_to_serial, false);
+    returnToMainPage();
     return true;
   }
 
   if (lcdUiState == ACTION_FEEDBACK)
   {
-    resetLcdUiToMainPage();
-    requestAlarmRefresh(local_ptr_to_serial, false);
+    returnToMainPage();
     return true;
   }
 
@@ -1573,7 +1654,7 @@ bool alarmActionSelectorHandlePress()
     {
       if (lcdPageOption == 0)
       {
-        resetLcdUiToMainPage();
+        returnToMainPage();
       }
     }
     else if (lcdPage == PAGE_BROKER)
@@ -1581,12 +1662,16 @@ bool alarmActionSelectorHandlePress()
       if (lcdPageOption == 0)
       {
         resetLcdUiToMainPage();
-        setLcdUiState(SETTINGS_MENU);
-        open_settings_menu_at(2);
+        showActionFeedback(selectMqttBrokerOption(0) ? "Broker selected" : "Broker failed");
+      }
+      else if (lcdPageOption == 1)
+      {
+        resetLcdUiToMainPage();
+        showActionFeedback(selectMqttBrokerOption(1) ? "Broker selected" : "Broker failed");
       }
       else
       {
-        resetLcdUiToMainPage();
+        returnToMainPage();
       }
     }
     else if (lcdPage == PAGE_MUTE)
@@ -1611,7 +1696,7 @@ bool alarmActionSelectorHandlePress()
       }
       else
       {
-        resetLcdUiToMainPage();
+        returnToMainPage();
       }
     }
     markLcdDirty();
@@ -1628,23 +1713,27 @@ bool alarmActionSelectorHandlePress()
   {
     lcdPage = PAGE_WIFI;
     lcdPageOption = 0;
+    iconFocusActive = false;
     setLcdUiState(ICON_MENU);
   }
   else if (lcdFocus == FOCUS_BROKER)
   {
     lcdPage = PAGE_BROKER;
     lcdPageOption = 0;
+    iconFocusActive = false;
     setLcdUiState(ICON_MENU);
   }
   else if (lcdFocus == FOCUS_MUTE)
   {
     lcdPage = PAGE_MUTE;
     lcdPageOption = 0;
+    iconFocusActive = false;
     setLcdUiState(ICON_MENU);
   }
   else if (lcdFocus == FOCUS_SETTINGS)
   {
     resetLcdUiToMainPage();
+    iconFocusActive = false;
     setLcdUiState(SETTINGS_MENU);
     reset_menu_navigation();
   }
@@ -1778,15 +1867,10 @@ void renderWifiPage(char rows[LCD_ROWS][LCD_COLS + 1])
 
 void renderBrokerPage(char rows[LCD_ROWS][LCD_COLS + 1])
 {
-  formatFullRow(rows[0], "Broker/MQTT");
-  formatFullRow(rows[1], "%.20s", mqtt_broker_name);
-  formatFullRow(rows[2], "%cBroker %s F:%u",
-                lcdPageOption == 0 ? '>' : ' ',
-                selectedBrokerIndex == activeBrokerIndex ? "Sel" : "Fail",
-                mqttFailCount);
-  formatFullRow(rows[3], "%cBack %.14s",
-                lcdPageOption == 1 ? '>' : ' ',
-                client.connected() ? mqttStatusText() : mqttStateDescription(client.state()));
+  formatFullRow(rows[0], "Broker Select");
+  formatFullRow(rows[1], "%c1 Public Shiftr", lcdPageOption == 0 ? '>' : ' ');
+  formatFullRow(rows[2], "%c2 Krake PubInv", lcdPageOption == 1 ? '>' : ' ');
+  formatFullRow(rows[3], "%cBack", lcdPageOption == 2 ? '>' : ' ');
 }
 
 void renderMutePage(char rows[LCD_ROWS][LCD_COLS + 1])
@@ -1977,7 +2061,7 @@ void showStatusLCD(AlarmLevel level, bool muted, char *msg)
 
     if (lcdUiState == ALARM_ACTION_SELECT)
     {
-      formatFullRow(rows[3], "Ack Dismiss Shelve");
+      formatFullRow(rows[3], "Ack  Shelve Dismiss");
     }
 
     if (lcdUiState == ACTION_FEEDBACK)
@@ -2058,6 +2142,20 @@ void requestAlarmRefresh(Stream *serialport, bool includeAudio)
 
   start_of_song = millis();
   markAlarmUiAudioPending(includeAudio);
+}
+
+void showMainLcdFrameNow(Stream *serialport)
+{
+  if (serialport == nullptr)
+  {
+    return;
+  }
+
+  resetLcdUiToMainPage();
+  alarmUiUpdatePending = false;
+  alarmUiPendingRequestCount = 0;
+  lastAlarmUiUpdateMs = millis();
+  showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
 }
 
 void annunciateAlarmLevel(Stream *serialport)

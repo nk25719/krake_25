@@ -209,15 +209,17 @@ char mqtt_user_storage[32] = {0};
 char mqtt_password_storage[64] = {0};
 struct BrokerOption
 {
-  const char *label;
+  uint8_t index;
+  const char *name;
   const char *host;
   uint16_t port;
   const char *username;
   const char *password;
+  const char *notes;
 };
 const BrokerOption brokerOptions[] = {
-    {"Public Shiftr", "public.cloud.shiftr.io", 1883, "public", "public"},
-    {"Krake PubInv", "krakepubinv.cloud.shiftr.io", 1883, "krakepubinv", "DlDmkWjp4I4kgDcA"},
+    {1, "Public Shiftr", "public.cloud.shiftr.io", 1883, "public", "public", "Public test broker"},
+    {2, "Krake PubInv", "krakepubinv.cloud.shiftr.io", 1883, "krakepubinv", "DlDmkWjp4I4kgDcA", "Project broker"},
 };
 const uint8_t BROKER_OPTION_COUNT = sizeof(brokerOptions) / sizeof(brokerOptions[0]);
 const uint8_t DEFAULT_BROKER_INDEX = 1;
@@ -535,7 +537,7 @@ bool reconnect(bool force = false)
     activeBrokerIndex = (activeBrokerIndex + 1) % BROKER_OPTION_COUNT;
     const BrokerOption &nextBroker = brokerOptions[activeBrokerIndex];
     debugSerial.print("MQTT failover to ");
-    debugSerial.print(nextBroker.label);
+    debugSerial.print(nextBroker.name);
     debugSerial.print(" host=");
     debugSerial.println(nextBroker.host);
   }
@@ -1302,7 +1304,7 @@ bool applyBrokerSetting(const String &broker)
   for (uint8_t i = 0; i < BROKER_OPTION_COUNT; i++)
   {
     if (normalized.equalsIgnoreCase(brokerOptions[i].host) ||
-        normalized.equalsIgnoreCase(brokerOptions[i].label))
+        normalized.equalsIgnoreCase(brokerOptions[i].name))
     {
       return selectMqttBrokerOption(i);
     }
@@ -1403,6 +1405,7 @@ void callback(char *topic, byte *payload, unsigned int length)
       updateKrakeStatusFromAck(topic, mbuff);
       return;
     }
+    noteLcdQueueMessageReceived();
     markWatchedTopicParticipant(topic);
     interpretBuffer(mbuff, m, &debugSerial, &client); // Process the MQTT message
     requestAlarmRefresh(&debugSerial);
@@ -1658,6 +1661,25 @@ void setupOTA()
               payload += "\"mqttStateText\":\"" + jsonEscape(String(mqttStateDescription(client.state()))) + "\",";
               payload += "\"selectedBrokerIndex\":" + String(selectedBrokerIndex) + ",";
               payload += "\"activeBrokerIndex\":" + String(activeBrokerIndex) + ",";
+              payload += "\"brokerOptions\":[";
+              for (uint8_t i = 0; i < BROKER_OPTION_COUNT; i++)
+              {
+                if (i > 0)
+                {
+                  payload += ",";
+                }
+                payload += "{";
+                payload += "\"index\":" + String(brokerOptions[i].index) + ",";
+                payload += "\"name\":\"" + jsonEscape(String(brokerOptions[i].name)) + "\",";
+                payload += "\"host\":\"" + jsonEscape(String(brokerOptions[i].host)) + "\",";
+                payload += "\"port\":" + String(brokerOptions[i].port) + ",";
+                payload += "\"username\":\"" + jsonEscape(String(brokerOptions[i].username)) + "\",";
+                payload += "\"password\":\"" + jsonEscape(String(brokerOptions[i].password)) + "\",";
+                payload += "\"notes\":\"" + jsonEscape(String(brokerOptions[i].notes)) + "\",";
+                payload += "\"active\":" + String(i == selectedBrokerIndex ? "true" : "false");
+                payload += "}";
+              }
+              payload += "],";
               payload += "\"subscribeTopic\":\"" + jsonEscape(String(subscribe_Alarm_Topic)) + "\",";
               payload += "\"publishTopic\":\"" + jsonEscape(String(publish_Ack_Topic)) + "\",";
               payload += "\"extraTopics\":\"" + jsonEscape(joinedExtraTopics()) + "\",";

@@ -327,6 +327,7 @@ void updateFromSPI();
 
 void restoreAlarmLevel(Stream *serialport);
 void requestAlarmRefresh(Stream *serialport, bool includeAudio = true);
+void showMainLcdFrameNow(Stream *serialport);
 void unchanged_anunicateAlarmLevel(Stream *serialport);
 void annunciateAlarmLevel(Stream *serialport);
 void serviceAlarmUiAudio(Stream *serialport);
@@ -340,6 +341,8 @@ void showActionFeedback(const char *msg);
 void showInfoPage();
 void showWifiStatusPage();
 const char *lcdUiStateName();
+void drawLcdStatusIconsNow();
+void noteLcdQueueMessageReceived();
 void clearLCD(void);
 void splashLCD(wifi_mode_t wifiMode, const IPAddress &deviceIp);
 

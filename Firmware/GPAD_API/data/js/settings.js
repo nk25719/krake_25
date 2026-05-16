@@ -34,6 +34,22 @@
     KrakeUI.setText('muteStatus', data.muted ? 'Muted' : 'Unmuted');
     KrakeUI.setText('alarmTopic', data.publishTopic || '-');
     KrakeUI.setText('ackTopic', data.subscribeTopic || '-');
+    renderBrokerOptions(data.brokerOptions || []);
+  }
+  function renderBrokerOptions(options) {
+    const node = KrakeUI.byId('brokerOptions');
+    if (!node) return;
+    if (!options.length) {
+      node.textContent = '-';
+      return;
+    }
+    node.innerHTML = '';
+    options.forEach(option => {
+      const row = document.createElement('div');
+      const active = option.active ? 'active' : 'saved';
+      row.textContent = `${option.index}. ${option.name} (${active}) - ${option.host}:${option.port} user=${option.username || '-'} pass=${option.password || '-'} - ${option.notes || ''}`;
+      node.appendChild(row);
+    });
   }
   async function resetWifi() {
     if (!confirm('This will clear WiFi credentials and restart KRAKE. Continue?')) return;

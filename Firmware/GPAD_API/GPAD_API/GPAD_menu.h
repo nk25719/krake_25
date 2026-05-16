@@ -12,6 +12,7 @@ void registerRotationEvent(bool CW);
 void registerRotaryEncoderPress();
 
 void reset_menu_navigation();
+void returnToMainPage();
 
 void executeAlarmAction(uint8_t actionIndex);
 
