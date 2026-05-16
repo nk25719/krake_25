@@ -183,6 +183,7 @@ extern uint8_t selectedBrokerIndex;
 extern uint8_t activeBrokerIndex;
 extern uint8_t mqttFailCount;
 extern const char *mqttStateDescription(int state);
+extern const char *brokerConnectionStateText();
 extern bool selectMqttBrokerOption(uint8_t index);
  
 // For LCD
@@ -907,14 +908,7 @@ void encoderSwitchCallback(byte buttonEvent)
     DBG_PRINT(F("ENCODER_SWITCH Button Long Pressed For "));
     DBG_PRINT(longPressTime);
     DBG_PRINTLN(F("ms"));
-    alarmActionSelectorActive = false;
-    lcdPage = PAGE_MAIN;
-    lcdFocus = FOCUS_SETTINGS;
-    setLcdUiState(SETTINGS_MENU);
-    if (!running_menu)
-    {
-      reset_menu_navigation();
-    }
+    returnToMainPage();
     break;
 
   // onMultiHit is indicated when you hit the button
@@ -1109,6 +1103,60 @@ private:
   size_t _pos;
 };
 
+void printAndPublishStatusLine(Stream *serialport, PubSubClient *mqttClient, const char *line)
+{
+  serialport->println(line != nullptr ? line : "");
+  if (mqttClient != nullptr && mqttClient->connected())
+  {
+    publishAck(mqttClient, line);
+  }
+}
+
+void formatUptime(char *dest, size_t destLen)
+{
+  if (destLen == 0)
+  {
+    return;
+  }
+  const unsigned long totalSeconds = millis() / 1000UL;
+  const unsigned long hours = totalSeconds / 3600UL;
+  const unsigned long minutes = (totalSeconds % 3600UL) / 60UL;
+  const unsigned long seconds = totalSeconds % 60UL;
+  snprintf(dest, destLen, "%02lu:%02lu:%02lu", hours, minutes, seconds);
+}
+
+void printSystemInfo(Stream *serialport, PubSubClient *mqttClient)
+{
+  char value[80];
+  printAndPublishStatusLine(serialport, mqttClient, "=== KRAKE SYSTEM INFO ===");
+  snprintf(value, sizeof(value), "KRAKE-%.6s", macAddressString + 6);
+  char line[128];
+  snprintf(line, sizeof(line), "SN: %s", value);
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  snprintf(line, sizeof(line), "FW: %s", FIRMWARE_VERSION);
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  ipAddressText(value, sizeof(value));
+  snprintf(line, sizeof(line), "IP: %s", value);
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  snprintf(line, sizeof(line), "MAC: %s", macAddressString);
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  currentSsid(value, sizeof(value));
+  snprintf(line, sizeof(line), "SSID: %s", value);
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  snprintf(line, sizeof(line), "Broker: %s", mqtt_broker_name);
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  snprintf(line, sizeof(line), "MQTT: %s", brokerConnectionStateText());
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  snprintf(line, sizeof(line), "Heap: %lu", static_cast<unsigned long>(ESP.getFreeHeap()));
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  formatUptime(value, sizeof(value));
+  snprintf(line, sizeof(line), "Uptime: %s", value);
+  printAndPublishStatusLine(serialport, mqttClient, line);
+  printAndPublishStatusLine(serialport, mqttClient, "=========================");
+}
+
+void showStatusLCD(AlarmLevel level, bool muted, char *msg);
+
 void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *client)
 {
   if (buf == nullptr || serialport == nullptr || rlen < 1)
@@ -1200,103 +1248,26 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
     alarm((AlarmLevel)N, msg, serialport);
     break;
   }
+  case 'I':
   case 'i':
   {
-    // Firmware Version
-    //  81+23 = Maximum string length
-    //         char onInfoMsg[32] = "Firmware Version: ";
-    //         static char onInfoMsg[81+24] = "Firmware Version: "; //This does not have the bug.
-    char onInfoMsg[81 + 24] = "Firmware Version: "; // This
-    char str[20];
-
-    strcat(onInfoMsg, FIRMWARE_VERSION);
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-    onInfoMsg[0] = '\0';
-
-    // Report API version
-    strcat(onInfoMsg, "GPAD API Version: ");
-    strcat(onInfoMsg, gpadApi.getVersion().toString().c_str());
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-    onInfoMsg[0] = '\0';
-
-    // Up time
-    onInfoMsg[0] = '\0';
-
-    str[0] = '\0';
-    strcat(onInfoMsg, "System up time (mills): ");
-    sprintf(str, "%d", millis());
-    strcat(onInfoMsg, str);
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-
-    // Mute status
-    onInfoMsg[0] = '\0';
-    // onInfoMsg[32] = "Mute Status: ";
-    strcat(onInfoMsg, "Mute Status: ");
-    if (currentlyMuted)
+    printSystemInfo(serialport, client);
+    break;
+  }
+  case 'R':
+  case 'r':
+  {
+    serialport->println(F("Software reset requested."));
+    if (client != nullptr && client->connected())
     {
-      strcat(onInfoMsg, "MUTED");
+      publishAck(client, "Software reset requested.");
     }
-    else
-    {
-      strcat(onInfoMsg, "NOT MUTED");
-    }
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-
-    // Alarm level
-    onInfoMsg[0] = '\0';
-    str[0] = '\0';
-    strcat(onInfoMsg, "Current alarm Level: ");
-    sprintf(str, "%d", getCurrentAlarmLevel());
-    strcat(onInfoMsg, str);
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-
-    // Alarm message
-    onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "Current alarm message: ");
-    //        strcat(onInfoMsg, *getCurrentMessage());  Produced error error: invalid conversion from 'char' to 'const char*' [-fpermissive]
-    strcat(onInfoMsg, getCurrentMessage());
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-
-    // IP Address
-    onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "IP Address: ");
-
-    IPAddress stationIp = WiFi.localIP();
-    IPAddress accessPointIp = WiFi.softAPIP();
-    IPAddress ip = stationIp;
-
-    // If we don't have a station address yet, fall back to AP address.
-    if (stationIp[0] == 0 && stationIp[1] == 0 && stationIp[2] == 0 && stationIp[3] == 0)
-    {
-      ip = accessPointIp;
-    }
-
-    char ipString[16];
-    snprintf(ipString, sizeof(ipString), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
-
-    strcat(onInfoMsg, ipString);
-
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-
-    // Reset reason
-    onInfoMsg[0] = '\0';
-    strcat(onInfoMsg, "Reset reason: ");
-    const esp_reset_reason_t resetReason = esp_reset_reason();
-    strcat(onInfoMsg, resetReasonToString(resetReason));
-    if (client != nullptr) publishAck(client, onInfoMsg);
-    serialport->println(onInfoMsg);
-
-    // serialport->print("myIP =");
-    // serialport->println(myIP);   // Caused Error Multiple libraries were found for "WiFiManager.h"
-
-    break; // end of 'i'
+    showActionFeedback("System restarting");
+    requestAlarmRefresh(serialport, false);
+    showStatusLCD(currentLevel, currentlyMuted, AlarmMessageBuffer);
+    delay(100);
+    ESP.restart();
+    break;
   }
   default:
   {
@@ -1309,9 +1280,6 @@ void interpretBuffer(char *buf, int rlen, Stream *serialport, PubSubClient *clie
   serialport->println(F("interpret Done"));
   // FLE  delay(3000);
 } // end interpretBuffer()
-
-// This has to be called periodically, at a minimum to handle the mute_button
-void showStatusLCD(AlarmLevel level, bool muted, char *msg);
 
 void muteTimeoutWatchdog(Stream *serialport)
 {
@@ -1555,6 +1523,21 @@ void executeSelectedAlarmAction()
 
 bool alarmActionSelectorHandleRotation(bool clockwise)
 {
+  if (lcdUiState == INFO_PAGE && lcdPage == PAGE_INFO)
+  {
+    if (clockwise)
+    {
+      lcdPageOption = (lcdPageOption + 1) % 3;
+    }
+    else
+    {
+      lcdPageOption = (lcdPageOption == 0) ? 2 : (lcdPageOption - 1);
+    }
+    markLcdDirty();
+    requestAlarmRefresh(local_ptr_to_serial, false);
+    return true;
+  }
+
   if (lcdUiState == ICON_MENU)
   {
     const uint8_t count = pageOptionCount();
@@ -1666,12 +1649,12 @@ bool alarmActionSelectorHandlePress()
       if (lcdPageOption == 0)
       {
         resetLcdUiToMainPage();
-        showActionFeedback(selectMqttBrokerOption(0) ? "Broker selected" : "Broker failed");
+        showActionFeedback(selectMqttBrokerOption(1) ? "Broker selected" : "Broker failed");
       }
       else if (lcdPageOption == 1)
       {
         resetLcdUiToMainPage();
-        showActionFeedback(selectMqttBrokerOption(1) ? "Broker selected" : "Broker failed");
+        showActionFeedback(selectMqttBrokerOption(0) ? "Broker selected" : "Broker failed");
       }
       else
       {
@@ -1684,7 +1667,7 @@ bool alarmActionSelectorHandlePress()
       {
         resetLcdUiToMainPage();
         setLcdUiState(SETTINGS_MENU);
-        open_settings_menu_at(4);
+        open_settings_menu_at(3);
       }
       else if (lcdPageOption == 1)
       {
@@ -1872,8 +1855,8 @@ void renderWifiPage(char rows[LCD_ROWS][LCD_COLS + 1])
 void renderBrokerPage(char rows[LCD_ROWS][LCD_COLS + 1])
 {
   formatFullRow(rows[0], "Broker Select");
-  formatFullRow(rows[1], "%c1 Public Shiftr", lcdPageOption == 0 ? '>' : ' ');
-  formatFullRow(rows[2], "%c2 Krake PubInv", lcdPageOption == 1 ? '>' : ' ');
+  formatFullRow(rows[1], "%c1 Krake PubInv", lcdPageOption == 0 ? '>' : ' ');
+  formatFullRow(rows[2], "%c2 Public Shiftr", lcdPageOption == 1 ? '>' : ' ');
   formatFullRow(rows[3], "%cBack", lcdPageOption == 2 ? '>' : ' ');
 }
 
@@ -1895,18 +1878,26 @@ void renderInfoPage(char rows[LCD_ROWS][LCD_COLS + 1])
   char ssid[21];
   ipAddressText(ip, sizeof(ip));
   currentSsid(ssid, sizeof(ssid));
+  char serialNumber[21];
+  snprintf(serialNumber, sizeof(serialNumber), "KRAKE-%.6s", macAddressString + 6);
 
-  formatFullRow(rows[0], "Info");
-  formatFullRow(rows[1], "IP:%s", ip);
-  formatFullRow(rows[2], "MAC:%s", macAddressString);
-  if (ssid[0] != '\0' && strcmp(ssid, "Not connected") != 0)
+  formatFullRow(rows[0], "Info %u/3", static_cast<unsigned>(lcdPageOption + 1));
+  if (lcdPageOption == 0)
   {
-    formatFullRow(rows[3], "SSID:%s", ssid);
+    formatFullRow(rows[1], "SN:%s", serialNumber);
+    formatFullRow(rows[2], "FW:%s", FIRMWARE_VERSION);
+  }
+  else if (lcdPageOption == 1)
+  {
+    formatFullRow(rows[1], "IP:%s", ip);
+    formatFullRow(rows[2], "MAC:%s", macAddressString);
   }
   else
   {
-    formatFullRow(rows[3], "Press to go back");
+    formatFullRow(rows[1], "SSID:%.15s", ssid);
+    formatFullRow(rows[2], "MQTT:%.15s", brokerConnectionStateText());
   }
+  formatFullRow(rows[3], "Back");
 }
 
 void renderWifiStatusPage(char rows[LCD_ROWS][LCD_COLS + 1])
@@ -1982,7 +1973,7 @@ void showStatusLCD(AlarmLevel level, bool muted, char *msg)
     {
       lcdUiState = MAIN_PAGE;
     }
-    formatMain(rows[0], "Q:0");
+    formatMain(rows[0], "PAQ:0");
     formatMain(rows[1], "System OK");
     if (currentlyMuted)
     {
@@ -2002,11 +1993,11 @@ void showStatusLCD(AlarmLevel level, bool muted, char *msg)
   {
     if (alarmQueueCount > 1)
     {
-      formatMain(rows[0], "Q:+ NEXT");
+      formatMain(rows[0], "PAQ:+ NEXT");
     }
     else
     {
-      formatMain(rows[0], "Q:1");
+      formatMain(rows[0], "PAQ:1");
     }
 
     char displayText[sizeof(alarmDisplayBuffer)];

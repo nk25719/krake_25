@@ -21,7 +21,7 @@ extern unsigned long muteTimeoutEndMillis;
 extern bool selectMqttBrokerOption(uint8_t index);
 
 #define LEDPIN 12
-#define MAX_DEPTH 2
+#define MAX_DEPTH 3
 
 static bool settingsExitRequested = false;
 
@@ -303,6 +303,18 @@ result actionInfo(eventMask e)
   return proceed;
 }
 
+result actionDiagnostics(eventMask e)
+{
+  if (e == eventMask::enterEvent)
+  {
+    running_menu = false;
+    menu_just_exited = false;
+    Menu::doExit();
+    showInfoPage();
+  }
+  return proceed;
+}
+
 
 MENU(comSetupMenu, "COM Setup", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
   FIELD(comBaudRate, "Baud Rate", "", 1200, 115200, 9600, 1, Menu::doNothing, anyEvent, noStyle),
@@ -323,8 +335,8 @@ MENU(wifiMenu, "WiFi", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
 );
 
 MENU(brokerMenu, "Broker", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
-  OP("1 Public Shiftr", actionBrokerPublic, enterEvent),
-  OP("2 Krake PubInv", actionBrokerKrake, enterEvent),
+  OP("1 Krake PubInv", actionBrokerKrake, enterEvent),
+  OP("2 Public Shiftr", actionBrokerPublic, enterEvent),
   OP("Back", actionBack, enterEvent)
 );
 
@@ -335,14 +347,19 @@ MENU(muteMenu, "Mute Duration", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
   OP("Back", actionBack, enterEvent)
 );
 
+MENU(developerMenu, "Developer Mode", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
+  SUBMENU(brokerMenu),
+  SUBMENU(comSetupMenu),
+  OP("Diagnostics", actionDiagnostics, enterEvent),
+  OP("Back", actionBack, enterEvent)
+);
 
 MENU(mainMenu, "Settings", Menu::doNothing, Menu::noEvent, Menu::wrapStyle,
   OP("Info", actionInfo, enterEvent),
   SUBMENU(wifiMenu),
-  SUBMENU(brokerMenu),
   FIELD(volumeDFPlayer, "Volume", "%", 1, 30, 20, 1, action4, enterEvent, wrapStyle),
   SUBMENU(muteMenu),
-  SUBMENU(comSetupMenu),
+  SUBMENU(developerMenu),
   SUBMENU(resetConfirmMenu),
   OP("Back", actionSettingsBack, enterEvent)
 );

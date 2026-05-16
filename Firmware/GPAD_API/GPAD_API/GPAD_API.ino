@@ -192,16 +192,9 @@ WifiOTA::Manager wifiManager(WiFi, debugSerial);
 #endif
 
 // MQTT Broker
-// #define USE_HIVEMQ
-#ifdef USE_HIVEMQ
-const char *DEFAULT_MQTT_BROKER_NAME = "broker.hivemq.com";
-const char *mqtt_user = "";
-const char *mqtt_password = "";
-#else
 const char *DEFAULT_MQTT_BROKER_NAME = "krakepubinv.cloud.shiftr.io";
 const char *mqtt_user = "krakepubinv";
 const char *mqtt_password = "DlDmkWjp4I4kgDcA";
-#endif
 const size_t MQTT_BROKER_MAX_LEN = 64;
 const char *MQTT_CONFIG_PATH = "/mqtt.json";
 char mqtt_broker_name[MQTT_BROKER_MAX_LEN] = {0};
@@ -218,8 +211,8 @@ struct BrokerOption
   const char *notes;
 };
 const BrokerOption brokerOptions[] = {
-    {1, "Public Shiftr", "public.cloud.shiftr.io", 1883, "public", "public", "Public test broker"},
-    {2, "Krake PubInv", "krakepubinv.cloud.shiftr.io", 1883, "krakepubinv", "DlDmkWjp4I4kgDcA", "Project broker"},
+    {2, "Public Shiftr", "public.cloud.shiftr.io", 1883, "public", "public", "Public test broker"},
+    {1, "Krake PubInv", "krakepubinv.cloud.shiftr.io", 1883, "krakepubinv", "DlDmkWjp4I4kgDcA", "Project broker"},
 };
 const uint8_t BROKER_OPTION_COUNT = sizeof(brokerOptions) / sizeof(brokerOptions[0]);
 const uint8_t DEFAULT_BROKER_INDEX = 1;
@@ -244,9 +237,18 @@ char watchedTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
 uint8_t watchedTopicCount = 0;
 unsigned long wifiResetRequestedAtMs = 0;
 const unsigned long MQTT_RECONNECT_INTERVAL_MS = 3000;
-const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 2;
+const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 1;
 unsigned long lastMqttReconnectAttemptMs = 0;
 bool mqttReconnectRequested = false;
+enum BrokerState : uint8_t
+{
+  BROKER_WAITING_WIFI,
+  BROKER_CONNECTING,
+  BROKER_CONNECTED,
+  BROKER_FAILED,
+  BROKER_RETRYING,
+};
+BrokerState brokerState = BROKER_WAITING_WIFI;
 
 const uint8_t MAX_TRACKED_KRAKES = 16;
 const unsigned long KRAKE_ONLINE_TIMEOUT_MS = 30000;
@@ -266,6 +268,7 @@ TrackedKrake trackedKrakes[MAX_TRACKED_KRAKES];
 
 String jsonEscape(const String &raw);
 const char *mqttStateDescription(int state);
+const char *brokerConnectionStateText();
 bool endsWithAckTopic(const char *topic);
 bool isAllowedPublishTopic(const String &topic);
 bool extractJsonString(const String &json, const char *key, String &value, int startPos = 0, int *valueEndPos = nullptr);
@@ -400,6 +403,7 @@ void requestMqttReconnect()
   mqttReconnectRequested = true;
   lastMqttReconnectAttemptMs = 0;
   mqttFailCount = 0;
+  brokerState = (WiFi.status() == WL_CONNECTED) ? BROKER_RETRYING : BROKER_WAITING_WIFI;
   if (client.connected())
   {
     client.disconnect();
@@ -459,11 +463,13 @@ bool reconnect(bool force = false)
   if (client.connected())
   {
     mqttReconnectRequested = false;
+    brokerState = BROKER_CONNECTED;
     return true;
   }
 
   if (WiFi.status() != WL_CONNECTED)
   {
+    brokerState = BROKER_WAITING_WIFI;
     return false;
   }
 
@@ -475,6 +481,7 @@ bool reconnect(bool force = false)
   lastMqttReconnectAttemptMs = now;
   mqttReconnectRequested = false;
   applyActiveMqttBrokerConfig();
+  brokerState = BROKER_CONNECTING;
 
   char clientId[sizeof(COMPANY_NAME) + MAC_ADDRESS_STRING_LENGTH + 1];
   snprintf(clientId, sizeof(clientId), "%s-%s", COMPANY_NAME, macAddressString);
@@ -502,6 +509,7 @@ bool reconnect(bool force = false)
     debugSerial.print("success at: ");
     debugSerial.println(millis());
     mqttFailCount = 0;
+    brokerState = BROKER_CONNECTED;
     if (selectedBrokerIndex != activeBrokerIndex)
     {
       selectedBrokerIndex = activeBrokerIndex;
@@ -531,9 +539,11 @@ bool reconnect(bool force = false)
   debugSerial.print(" ");
   debugSerial.println(mqttStateDescription(client.state()));
   mqttFailCount++;
+  brokerState = BROKER_FAILED;
   if (mqttFailCount >= MQTT_FAILOVER_THRESHOLD)
   {
     mqttFailCount = 0;
+    brokerState = BROKER_RETRYING;
     activeBrokerIndex = (activeBrokerIndex + 1) % BROKER_OPTION_COUNT;
     const BrokerOption &nextBroker = brokerOptions[activeBrokerIndex];
     debugSerial.print("MQTT failover to ");
@@ -571,6 +581,25 @@ const char *mqttStateDescription(int state)
     return "unauthorized";
   default:
     return "unknown";
+  }
+}
+
+const char *brokerConnectionStateText()
+{
+  switch (brokerState)
+  {
+  case BROKER_WAITING_WIFI:
+    return "Waiting WiFi";
+  case BROKER_CONNECTING:
+    return "Connecting";
+  case BROKER_CONNECTED:
+    return "Connected";
+  case BROKER_FAILED:
+    return "Failed";
+  case BROKER_RETRYING:
+    return "Retrying";
+  default:
+    return "Unknown";
   }
 }
 
@@ -1659,6 +1688,7 @@ void setupOTA()
               payload += "\"mqttConnected\":" + String(client.connected() ? "true" : "false") + ",";
               payload += "\"mqttState\":" + String(client.state()) + ",";
               payload += "\"mqttStateText\":\"" + jsonEscape(String(mqttStateDescription(client.state()))) + "\",";
+              payload += "\"brokerState\":\"" + jsonEscape(String(brokerConnectionStateText())) + "\",";
               payload += "\"selectedBrokerIndex\":" + String(selectedBrokerIndex) + ",";
               payload += "\"activeBrokerIndex\":" + String(activeBrokerIndex) + ",";
               payload += "\"brokerOptions\":[";
@@ -2189,12 +2219,17 @@ void serviceMqttClient()
       debugSerial.print(" lost MQTT at: ");
       debugSerial.println(millis());
 #endif
+      brokerState = BROKER_FAILED;
       requestMqttReconnect();
     }
     serviceMqttQueue(&client);
   }
   else if (mqttReconnectRequested || WiFi.status() == WL_CONNECTED)
   {
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      brokerState = BROKER_WAITING_WIFI;
+    }
     reconnect();
     serviceMqttQueue(&client);
   }
