@@ -151,7 +151,7 @@ void Manager::startPortal(const char *const accessPointSsid)
 
   auto staGotIpCallback = [this](arduino_event_id_t event, arduino_event_info_t info)
   {
-    if ((this->wifi.localIP() == INADDR_NONE) && (this->getMode() == wifi_mode_t::WIFI_MODE_STA))
+    if ((this->wifi.localIP() == INADDR_NONE) && (this->getMode() != wifi_mode_t::WIFI_MODE_AP))
     {
       return;
     }

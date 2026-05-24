@@ -211,12 +211,10 @@ struct BrokerOption
   const char *notes;
 };
 const BrokerOption brokerOptions[] = {
-    {2, "Public Shiftr", "public.cloud.shiftr.io", 1883, "public", "public", "Public test broker"},
     {1, "Krake PubInv", "krakepubinv.cloud.shiftr.io", 1883, "krakepubinv", "DlDmkWjp4I4kgDcA", "Project broker"},
 };
 const uint8_t BROKER_OPTION_COUNT = sizeof(brokerOptions) / sizeof(brokerOptions[0]);
-const uint8_t DEFAULT_BROKER_INDEX = 1;
-const uint8_t MQTT_FAILOVER_THRESHOLD = 5;
+const uint8_t DEFAULT_BROKER_INDEX = 0;
 uint8_t selectedBrokerIndex = DEFAULT_BROKER_INDEX;
 uint8_t activeBrokerIndex = DEFAULT_BROKER_INDEX;
 uint8_t mqttFailCount = 0;
@@ -540,17 +538,6 @@ bool reconnect(bool force = false)
   debugSerial.println(mqttStateDescription(client.state()));
   mqttFailCount++;
   brokerState = BROKER_FAILED;
-  if (mqttFailCount >= MQTT_FAILOVER_THRESHOLD)
-  {
-    mqttFailCount = 0;
-    brokerState = BROKER_RETRYING;
-    activeBrokerIndex = (activeBrokerIndex + 1) % BROKER_OPTION_COUNT;
-    const BrokerOption &nextBroker = brokerOptions[activeBrokerIndex];
-    debugSerial.print("MQTT failover to ");
-    debugSerial.print(nextBroker.name);
-    debugSerial.print(" host=");
-    debugSerial.println(nextBroker.host);
-  }
   yield();
   return false;
 }

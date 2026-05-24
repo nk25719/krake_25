@@ -10,7 +10,7 @@ const int LED_PIN = 13; // Krake
 const int nDFPlayer_BUSY = 4; // active LOW BUSY pin from DFPlayer
 
 bool isDFPlayerDetected = false;
-int volumeDFPlayer = 20; // Range: 1 to 30
+int volumeDFPlayer = 20; // Range: 1 to 100 (%)
 int numberFilesDF = 0;   // Number of audio files found on SD card
 extern bool currentlyMuted;
 char command;
@@ -156,7 +156,7 @@ void setupDFPlayer()
     DBG_PRINTLN(F("Warning: unusual DFPlayer state. Possible clone/module variant, continuing test."));
   }
 
-  dfPlayer.volume(volumeDFPlayer);
+  setVolume(volumeDFPlayer);
   delayWithYield(300);
 
   numberFilesDF = dfPlayer.readFileCounts();
@@ -176,15 +176,16 @@ void setupDFPlayer()
   menu_opcoes();
 }
 
-void setVolume(int oneToThirty)
+void setVolume(int oneToHundred)
 {
-  if (oneToThirty < 1) oneToThirty = 1;
-  if (oneToThirty > 30) oneToThirty = 30;
+  if (oneToHundred < 1) oneToHundred = 1;
+  if (oneToHundred > 100) oneToHundred = 100;
 
-  volumeDFPlayer = oneToThirty;  
+  volumeDFPlayer = oneToHundred;
+  const int dfpVolume = ((volumeDFPlayer - 1) * 29) / 99 + 1;
   if (isDFPlayerDetected)
   {
-    dfPlayer.volume(volumeDFPlayer);
+    dfPlayer.volume(dfpVolume);
   }
 }
 
