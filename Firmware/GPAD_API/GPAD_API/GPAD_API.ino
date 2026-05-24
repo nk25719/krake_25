@@ -234,6 +234,8 @@ const uint8_t MAX_WATCH_TOPICS = 12;
 char watchedTopics[MAX_WATCH_TOPICS][MAX_TOPIC_LEN];
 uint8_t watchedTopicCount = 0;
 unsigned long wifiResetRequestedAtMs = 0;
+unsigned long lastWiFiReconnectAttemptMs = 0;
+const unsigned long WIFI_RECONNECT_INTERVAL_MS = 5000;
 const unsigned long MQTT_RECONNECT_INTERVAL_MS = 3000;
 const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 1;
 unsigned long lastMqttReconnectAttemptMs = 0;
@@ -321,12 +323,9 @@ void onWiFiDisconnect(WiFiEvent_t event, WiFiEventInfo_t info) {
   (void)event;
   (void)info;
 #endif
-  
-  // OPTION A: Simple Reconnect
-  //WiFi.begin(); 
-  
-  // OPTION B: Re-trigger WiFiManager Portal
-  // wm.startConfigPortal("AutoConnectAP");
+
+  // Force immediate reconnect attempt in loop (including AP mode).
+  lastWiFiReconnectAttemptMs = 0;
 }
 
 
@@ -2291,6 +2290,30 @@ void setup()
 bool running_menu = false;
 bool menu_just_exited = false;
 
+void serviceWiFiReconnect()
+{
+#if defined HMWK || defined KRAKE
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    return;
+  }
+
+  if (wifiManager.getMode() != wifi_mode_t::WIFI_MODE_AP && wifiManager.getMode() != wifi_mode_t::WIFI_MODE_APSTA)
+  {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (lastWiFiReconnectAttemptMs != 0 && (now - lastWiFiReconnectAttemptMs) < WIFI_RECONNECT_INTERVAL_MS)
+  {
+    return;
+  }
+
+  lastWiFiReconnectAttemptMs = now;
+  WiFi.reconnect();
+#endif
+}
+
 void serviceMqttClient()
 {
 #if defined HMWK || defined KRAKE
@@ -2385,6 +2408,7 @@ void loop()
 {
   // MQTT gets the first and most frequent slices so inbound bursts are drained
   // before comparatively slow LCD/menu/audio work is serviced.
+  serviceWiFiReconnect();
   serviceMqttClient();
   serviceDeferredReset();
 
