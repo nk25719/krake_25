@@ -274,6 +274,7 @@ bool isAllowedPublishTopic(const String &topic);
 bool extractJsonString(const String &json, const char *key, String &value, int startPos = 0, int *valueEndPos = nullptr);
 bool writeMqttConfig();
 bool loadMqttConfig();
+bool ensureConfigFilesExist();
 void applyActiveMqttBrokerConfig();
 bool selectMqttBrokerOption(uint8_t index);
 int8_t findBrokerOptionByHost(const char *host);
@@ -1148,11 +1149,78 @@ bool writeMqttConfig()
   return written == payload.length();
 }
 
+bool ensureConfigFilesExist()
+{
+  bool ok = true;
+  if (!LittleFS.exists(MQTT_CONFIG_PATH))
+  {
+    File file = LittleFS.open(MQTT_CONFIG_PATH, "w");
+    if (!file)
+    {
+      debugSerial.println(F("Failed to create /mqtt.json"));
+      ok = false;
+    }
+    else
+    {
+      String payload = "{";
+      payload += "\"broker\":\"" + jsonEscape(String(DEFAULT_MQTT_BROKER_NAME)) + "\",";
+      payload += "\"host\":\"" + jsonEscape(String(DEFAULT_MQTT_BROKER_NAME)) + "\",";
+      payload += "\"port\":1883,";
+      payload += "\"selectedBrokerIndex\":\"" + String(DEFAULT_BROKER_INDEX) + "\",";
+      payload += "\"mqttUser\":\"krakepubinv\",";
+      payload += "\"username\":\"krakepubinv\",";
+      payload += "\"mqttPassword\":\"DlDmkWjp4I4kgDcA\",";
+      payload += "\"password\":\"DlDmkWjp4I4kgDcA\"";
+      payload += "}";
+      if (file.print(payload) != payload.length())
+      {
+        debugSerial.println(F("Failed to write default /mqtt.json"));
+        ok = false;
+      }
+      else
+      {
+        debugSerial.println(F("Created default /mqtt.json"));
+      }
+      file.close();
+    }
+  }
+
+  if (!LittleFS.exists("/wifi.json"))
+  {
+    File file = LittleFS.open("/wifi.json", "w");
+    if (!file)
+    {
+      debugSerial.println(F("Failed to create /wifi.json"));
+      ok = false;
+    }
+    else
+    {
+      const char *payload = "{\"networks\":[]}";
+      if (file.print(payload) != strlen(payload))
+      {
+        debugSerial.println(F("Failed to write default /wifi.json"));
+        ok = false;
+      }
+      else
+      {
+        debugSerial.println(F("Created default /wifi.json"));
+      }
+      file.close();
+    }
+  }
+
+  return ok;
+}
+
 bool loadMqttConfig()
 {
   if (!LittleFS.exists(MQTT_CONFIG_PATH))
   {
-    return false;
+    ensureConfigFilesExist();
+    if (!LittleFS.exists(MQTT_CONFIG_PATH))
+    {
+      return false;
+    }
   }
 
   File file = LittleFS.open(MQTT_CONFIG_PATH, "r");
@@ -1603,6 +1671,14 @@ bool isNoStorePath(const char *path)
 
 void sendStaticFile(AsyncWebServerRequest *request, const char *path, const char *contentType)
 {
+  if (LittleFS.exists(path))
+  {
+    AsyncWebServerResponse *response = request->beginResponse(LittleFS, path, contentType);
+    addWebUiHeaders(response, isNoStorePath(path));
+    request->send(response);
+    return;
+  }
+
   char gzipPath[64];
   snprintf(gzipPath, sizeof(gzipPath), "%s.gz", path);
   if (LittleFS.exists(gzipPath))
@@ -1613,14 +1689,7 @@ void sendStaticFile(AsyncWebServerRequest *request, const char *path, const char
     request->send(response);
     return;
   }
-  if (LittleFS.exists(path))
-  {
-    AsyncWebServerResponse *response = request->beginResponse(LittleFS, path, contentType);
-    addWebUiHeaders(response, isNoStorePath(path));
-    request->send(response);
-    return;
-  }
-  sendTextResponse(request, 404, "text/plain", "not found");
+  sendTextResponse(request, 404, "text/plain", "File not found");
 }
 
 void sendStaticFile(AsyncWebServerRequest *request, const char *path)
@@ -1652,6 +1721,12 @@ void setupOTA()
 
   server.on("/device-monitor.html", HTTP_GET, [](AsyncWebServerRequest *request)
             { sendStaticFile(request, "/device-monitor.html", "text/html"); });
+
+  server.on("/js/common.js", HTTP_GET, [](AsyncWebServerRequest *request)
+            { sendStaticFile(request, "/js/common.js", "application/javascript"); });
+
+  server.on("/js/device-monitor.js", HTTP_GET, [](AsyncWebServerRequest *request)
+            { sendStaticFile(request, "/js/device-monitor.js", "application/javascript"); });
 
   server.on("/debug-logs", HTTP_GET, [](AsyncWebServerRequest *request)
             { request->redirect("/monitor"); });

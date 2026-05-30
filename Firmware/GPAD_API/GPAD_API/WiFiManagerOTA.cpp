@@ -1,9 +1,34 @@
 #include "WiFiManagerOTA.h"
 #include <LittleFS.h>
 
+extern bool ensureConfigFilesExist();
+
 namespace
 {
   const char *WIFI_CREDENTIALS_PATH = "/wifi.json";
+
+  void listLittleFSFiles(const char *dirname = "/", uint8_t levels = 3)
+  {
+    File root = LittleFS.open(dirname);
+    if (!root || !root.isDirectory())
+    {
+      Serial.println(F("Failed to open LittleFS directory"));
+      return;
+    }
+
+    File file = root.openNextFile();
+    while (file)
+    {
+      Serial.print(file.name());
+      Serial.print(F("  "));
+      Serial.println(static_cast<unsigned>(file.size()));
+      if (levels > 0 && file.isDirectory())
+      {
+        listLittleFSFiles(file.name(), levels - 1);
+      }
+      file = root.openNextFile();
+    }
+  }
 
   String jsonEscape(const String &value)
   {
@@ -451,13 +476,15 @@ void WifiOTA::initLittleFS()
 {
   if (!LittleFS.begin(true))
   {
-    Serial.println(F("An error occurred while mounting LittleFS."));
+    Serial.println(F("LittleFS mount failed"));
   }
   else
   {
-#if (DEBUG > 1)
-    Serial.println("LittleFS mounted successfully.");
-#endif
+    Serial.println(F("LittleFS mounted"));
+    Serial.printf("LittleFS total: %u\n", static_cast<unsigned>(LittleFS.totalBytes()));
+    Serial.printf("LittleFS used : %u\n", static_cast<unsigned>(LittleFS.usedBytes()));
+    ensureConfigFilesExist();
+    listLittleFSFiles("/");
   }
 }
 
